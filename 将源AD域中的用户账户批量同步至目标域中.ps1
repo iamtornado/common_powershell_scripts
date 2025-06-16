@@ -65,6 +65,11 @@ param(
 # 若模块不存在或加载失败，脚本将终止执行
 Import-Module ActiveDirectory -ErrorAction Stop
 
+# 日志文件配置
+$LogFileName = "ADSyncErrors.log"
+$LogFilePath = [System.IO.Path]::GetFullPath($LogFileName)
+Write-Host "日志文件将保存至: $LogFilePath" -ForegroundColor Gray
+
 # 配置参数区域
 # 参数值已通过命令行参数传入，此处无需再次赋值
   # 如需修改默认值，请在调用脚本时使用参数指定
@@ -184,19 +189,19 @@ foreach ($User in $SourceUsers) {
             Write-Host "跳过重复账户 [$($User.SamAccountName)]" -ForegroundColor Yellow
             # 记录已存在警告到日志（不增加错误计数）
             $errorMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 警告: 用户 $($User.SamAccountName) 已存在于目标域"
-            $errorMsg | Out-File -FilePath "ADSyncErrors.log" -Append
+            $errorMsg | Out-File -FilePath $LogFilePath -Append
         } elseif ($_.Exception.Message -like "*access is denied*" -or $_.Exception.Message -like "*拒绝访问*") {  # 权限不足错误
             Write-Host "创建失败 [$($User.SamAccountName)]: 权限不足，请检查运行脚本的账户权限" -ForegroundColor Red
             $ErrorCount++
             # 记录详细错误信息到日志文件
             $errorMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 权限错误: 创建用户 $($User.SamAccountName) 失败 - $($_.Exception.Message)"
-            $errorMsg | Out-File -FilePath "ADSyncErrors.log" -Append
+            $errorMsg | Out-File -FilePath $LogFilePath -Append
         } else {  # 其他错误
             Write-Host "创建失败 [$($User.SamAccountName)]: $($_.Exception.Message)" -ForegroundColor Red
             $ErrorCount++
             # 记录详细错误信息到日志文件
             $errorMsg = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 错误: 创建用户 $($User.SamAccountName) 失败 - $($_.Exception.Message)"
-            $errorMsg | Out-File -FilePath "ADSyncErrors.log" -Append
+            $errorMsg | Out-File -FilePath $LogFilePath -Append
         }
     }
 }
@@ -205,6 +210,7 @@ foreach ($User in $SourceUsers) {
 Write-Host "`n操作完成！" -ForegroundColor Green
 Write-Host "成功创建用户数: $SuccessCount" -ForegroundColor Green
 Write-Host "失败/跳过用户数: $ErrorCount" -ForegroundColor ($ErrorCount -eq 0 ? "Green" : "Yellow")
+Write-Host "日志文件路径: $LogFilePath" -ForegroundColor Cyan
 
 # 退出脚本
 exit 0
