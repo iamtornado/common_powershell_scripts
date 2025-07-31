@@ -117,7 +117,7 @@
 - 🌐 **网络管理**：网络配置、连接测试、流量分析
 
 ## 联系作者
-- **DreamAI官网**：[DreamAI官方网站]([LICENSE](https://alidocs.dingtalk.com/i/nodes/Amq4vjg890AlRbA6Td9ZvlpDJ3kdP0wQ?utm_scene=team_space))
+- **DreamAI官网**：[DreamAI官方网站](https://alidocs.dingtalk.com/i/nodes/Amq4vjg890AlRbA6Td9ZvlpDJ3kdP0wQ?utm_scene=team_space)
 - **QQ邮箱**：1426693102@qq.com
 - **微信公众号**：AI发烧友
 
