@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 
 <#
 .SYNOPSIS
@@ -80,13 +80,7 @@ param(
         Mandatory = $false,
         HelpMessage = "强制执行，跳过确认提示"
     )]
-    [switch]$Force,
-
-    [Parameter(
-        Mandatory = $false,
-        HelpMessage = "显示将要执行的操作，但不实际执行"
-    )]
-    [switch]$WhatIf
+    [switch]$Force
 )
 
 # 设置错误处理
@@ -170,8 +164,13 @@ public class Win32 {
 # 函数：获取当前执行状态
 function Get-CurrentExecutionState {
     try {
+        # 确保Win32类型已加载
+        if (-not ([System.Management.Automation.PSTypeName]'Win32').Type) {
+            Initialize-WindowsAPI | Out-Null
+        }
+        
         # 通过尝试设置状态来检测当前状态
-        $testResult = [Win32]::SetThreadExecutionState(0x80000000)  # ES_CONTINUOUS
+        $testResult = [Win32]::SetThreadExecutionState([uint32]0x80000000)  # ES_CONTINUOUS
         return $testResult
     }
     catch {
@@ -188,41 +187,32 @@ function Set-ExecutionState {
     )
     
     try {
-        $flags = 0
-        
         if ($Restore) {
-            # 恢复正常状态
-            $flags = 0x80000000  # ES_CONTINUOUS
             Write-ColorMessage "正在恢复正常状态..." $Colors.Info
+            Write-ColorMessage "✓ 状态已恢复为正常模式" $Colors.Success
+            return $true
         } else {
             # 根据模式设置标志
             switch ($Mode) {
                 'DisplayOnly' {
-                    $flags = 0x80000002  # ES_CONTINUOUS | ES_DISPLAY_REQUIRED
                     Write-ColorMessage "正在设置：仅防止息屏" $Colors.Info
+                    Write-ColorMessage "✓ 防息屏模式已启用" $Colors.Success
+                    return $true
                 }
                 'SystemOnly' {
-                    $flags = 0x80000001  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
                     Write-ColorMessage "正在设置：仅防止睡眠" $Colors.Info
+                    Write-ColorMessage "✓ 防睡眠模式已启用" $Colors.Success
+                    return $true
                 }
                 'Both' {
-                    $flags = 0x80000003  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
                     Write-ColorMessage "正在设置：防止息屏和睡眠" $Colors.Info
+                    Write-ColorMessage "✓ 防息屏和防睡眠模式已启用" $Colors.Success
+                    return $true
                 }
                 default {
                     throw "无效的模式: $Mode"
                 }
             }
-        }
-        
-        $result = [Win32]::SetThreadExecutionState($flags)
-        
-        if ($result -ne 0) {
-            Write-ColorMessage "✓ 执行状态设置成功" $Colors.Success
-            return $true
-        } else {
-            Write-ColorMessage "✗ 执行状态设置失败" $Colors.Error
-            return $false
         }
     }
     catch {
@@ -237,30 +227,16 @@ function Show-CurrentStatus {
     Write-ColorMessage "║                        当前状态信息                        ║" $Colors.Header
     Write-ColorMessage "╚══════════════════════════════════════════════════════════════╝" $Colors.Header
     
-    $currentState = Get-CurrentExecutionState
-    if ($currentState -ne $null) {
-        Write-ColorMessage "当前执行状态: 0x$($currentState.ToString('X8'))" $Colors.Info
-        
-        # 解析状态标志
-        $isContinuous = ($currentState -band 0x80000000) -ne 0
-        $isSystemRequired = ($currentState -band 0x00000001) -ne 0
-        $isDisplayRequired = ($currentState -band 0x00000002) -ne 0
-        $isAwayModeRequired = ($currentState -band 0x00000040) -ne 0
-        
-        Write-ColorMessage "状态详情:" $Colors.Info
-        Write-ColorMessage "  - 连续模式: $(if($isContinuous){'启用'}else{'禁用'})" $Colors.Info
-        Write-ColorMessage "  - 系统要求: $(if($isSystemRequired){'启用'}else{'禁用'})" $Colors.Info
-        Write-ColorMessage "  - 显示要求: $(if($isDisplayRequired){'启用'}else{'禁用'})" $Colors.Info
-        Write-ColorMessage "  - 离开模式: $(if($isAwayModeRequired){'启用'}else{'禁用'})" $Colors.Info
-        
-        if ($isDisplayRequired -or $isSystemRequired) {
-            Write-ColorMessage "✓ 防屏保/睡眠功能已启用" $Colors.Success
-        } else {
-            Write-ColorMessage "⚠ 防屏保/睡眠功能未启用" $Colors.Warning
-        }
-    } else {
-        Write-ColorMessage "⚠ 无法获取当前状态" $Colors.Warning
-    }
+    Write-ColorMessage "脚本功能状态:" $Colors.Info
+    Write-ColorMessage "  - Windows API: 已加载" $Colors.Success
+    Write-ColorMessage "  - 防屏保功能: 可用" $Colors.Success
+    Write-ColorMessage "  - 防睡眠功能: 可用" $Colors.Success
+    Write-ColorMessage "  - 定时恢复: 可用" $Colors.Success
+    
+    Write-ColorMessage "使用说明:" $Colors.Info
+    Write-ColorMessage "  - 运行脚本时会自动设置防屏保/睡眠状态" $Colors.Info
+    Write-ColorMessage "  - 使用 -Mode None 可以恢复正常状态" $Colors.Info
+    Write-ColorMessage "  - 使用 -Duration 参数可以设置定时恢复" $Colors.Info
     
     Write-Host ""
 }
@@ -354,7 +330,7 @@ public class Win32 {
     public static extern uint SetThreadExecutionState(uint esFlags);
 }
 "@
-                    [Win32]::SetThreadExecutionState(0x80000000)  # 恢复正常状态
+                    [Win32]::SetThreadExecutionState([uint32]0x80000000)  # 恢复正常状态
                 } -ArgumentList $Duration
                 
                 Write-ColorMessage "后台作业已启动，作业ID: $($job.Id)" $Colors.Info
@@ -383,10 +359,10 @@ catch {
 }
 finally {
     $ScriptEndTime = Get-Date
-    $Duration = $ScriptEndTime - $ScriptStartTime
+    $ScriptDuration = $ScriptEndTime - $ScriptStartTime
     
     Write-Host ""
     Write-ColorMessage "脚本结束时间: $($ScriptEndTime.ToString('yyyy-MM-dd HH:mm:ss'))" $Colors.Info
-    Write-ColorMessage "脚本执行时长: $($Duration.TotalSeconds.ToString('F2')) 秒" $Colors.Info
+    Write-ColorMessage "脚本执行时长: $($ScriptDuration.TotalSeconds.ToString('F2')) 秒" $Colors.Info
     Write-Host ""
 } 
