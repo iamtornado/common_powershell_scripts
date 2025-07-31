@@ -32,6 +32,9 @@
 ├── 📁 Add-DomailnUserToLocalAdmin/
 │   ├── 📄 Add-DomainUserToLocalAdmin_fixed.ps1
 │   └── 📄 README.md
+├── 📁 通过ADSI查询远程Windows计算机管理员组成员/
+│   ├── 📄 Get-RemoteAdminMembers_ADSI.ps1
+│   └── 📄 README.md
 ├── 📁 Prevent-ScreenSaver-Sleep-Tool/
 │   ├── 📄 Prevent-ScreenSaver-Sleep-Tool.ps1
 │   └── 📄 README.md
@@ -56,6 +59,7 @@
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
 |----------|----------|----------|----------|----------|
 | **Add-DomailnUserToLocalAdmin** | 域账户本地管理员添加工具，支持远程WMI连接、ADSI操作、详细日志记录 | 远程权限管理、批量运维 | 2025-07-31 | [📖 查看详情](./Add-DomailnUserToLocalAdmin/README.md) |
+| **通过ADSI查询远程Windows计算机管理员组成员** | 基于ADSI技术的远程管理员组查询工具，支持本地/域账户识别、连通性检查 | 安全审计、权限管理、系统监控 | 2025-01-16 | [📖 查看详情](./通过ADSI查询远程Windows计算机管理员组成员/README.md) |
 
 ### 防止计算机息屏,进入屏保和睡眠工具
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
