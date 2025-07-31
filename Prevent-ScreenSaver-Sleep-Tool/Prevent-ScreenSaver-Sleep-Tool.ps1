@@ -237,6 +237,7 @@ function Show-CurrentStatus {
     Write-ColorMessage "  - 运行脚本时会自动设置防屏保/睡眠状态" $Colors.Info
     Write-ColorMessage "  - 使用 -Mode None 可以恢复正常状态" $Colors.Info
     Write-ColorMessage "  - 使用 -Duration 参数可以设置定时恢复" $Colors.Info
+    Write-ColorMessage "  - 系统重启后会自动恢复到正常模式" $Colors.Warning
     
     Write-Host ""
 }
