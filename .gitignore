@@ -1,0 +1,45 @@
+# 运行时生成的日志文件
+*.log
+
+# PowerShell执行策略相关
+*.ps1.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 备份文件
+*.bak
+*.backup
+
+# PowerShell模块缓存
+*.psm1.cache
+
+# 运行时生成的文件
+*.out
+*.output
+
+# 错误日志
+error.log
+debug.log
+trace.log
+
+# Windows系统文件
+desktop.ini
+$RECYCLE.BIN/
+
+# 压缩文件
+*.zip
+*.rar
+*.7z
+*.tar.gz
