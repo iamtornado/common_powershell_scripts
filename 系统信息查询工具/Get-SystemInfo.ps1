@@ -29,8 +29,8 @@
 .PARAMETER UseWinRM
     强制尝试使用WinRM连接。默认情况下直接使用WMI连接以提高速度。
 
-.PARAMETER Fast
-    快速模式：跳过耗时的查询（用户会话、管理员组成员），只获取基本系统信息。
+.PARAMETER OutputDebug
+    输出详细的调试信息，便于故障排查和性能分析。
 
 .EXAMPLE
     .\Get-SystemInfo.ps1
@@ -53,12 +53,16 @@
     强制使用WinRM连接查询远程计算机（默认使用更快的WMI连接）
 
 .EXAMPLE
-    .\Get-SystemInfo.ps1 -ComputerName "10.65.37.46" -Fast
-    快速模式查询远程计算机（跳过用户会话和管理员组成员查询）
+    .\Get-SystemInfo.ps1 -ComputerName "10.65.37.46"
+    查询远程计算机信息
+
+.EXAMPLE
+    .\Get-SystemInfo.ps1 -ComputerName "IMZSPC1097" -OutputDebug
+    查询远程计算机并输出详细调试信息，便于故障排查
 
 .NOTES
     作者: tornadoami
-    版本: 2.3
+    版本: 2.9
     创建日期: 2025-08-01
     要求: PowerShell 5.1+, Windows 7+
     
@@ -92,7 +96,7 @@ param(
     [switch]$UseWinRM,
 
     [Parameter(Mandatory = $false)]
-    [switch]$Fast
+    [switch]$OutputDebug
 )
 
 # 设置错误处理
@@ -127,25 +131,118 @@ function Write-ColorMessage {
     Write-Host $Message -ForegroundColor $Color
 }
 
+# 函数：输出调试信息
+function Write-DebugMessage {
+    param(
+        [string]$Message,
+        [string]$Category = "DEBUG"
+    )
+    if ($OutputDebug) {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'
+        Write-Host "[$timestamp] [$Category] $Message" -ForegroundColor Cyan
+    }
+}
+
+function Test-IsRealUser {
+    param(
+        [string]$UserName,
+        [string]$UserDomain
+    )
+    
+    # 排除系统虚拟账户
+    $systemAccounts = @(
+        'DWM-\d+',           # Desktop Window Manager
+        'UMFD-\d+',          # User Mode Font Driver
+        'SYSTEM',            # System account
+        'LOCAL SERVICE',     # Local Service
+        'NETWORK SERVICE',   # Network Service
+        'ANONYMOUS LOGON',   # Anonymous
+        'IUSR',             # IIS User
+        'IWAM_.*',          # IIS Web Application Manager
+        'ASPNET',           # ASP.NET account
+        'DefaultAccount',    # Windows 10 default account
+        'WDAGUtilityAccount' # Windows Defender Application Guard
+    )
+    
+    # 排除系统域
+    $systemDomains = @(
+        'Window Manager',
+        'Font Driver Host',
+        'NT AUTHORITY',
+        'BUILTIN'
+    )
+    
+    # 检查用户名是否为系统账户
+    foreach ($pattern in $systemAccounts) {
+        if ($UserName -match "^$pattern$") {
+            return $false
+        }
+    }
+    
+    # 检查域名是否为系统域
+    if ($UserDomain -in $systemDomains) {
+        return $false
+    }
+    
+    return $true
+}
+
 # 函数：测试网络连通性
 function Test-NetworkConnectivity {
     param([string]$TargetComputer)
     
     Write-ColorMessage "正在检测网络连通性..." $Colors.Info
+    Write-DebugMessage "开始ping测试目标: $TargetComputer" "NETWORK"
     
     try {
+        $startTime = Get-Date
+        
+        # 检查是否为IP地址
+        $isIPAddress = $false
+        try {
+            [System.Net.IPAddress]::Parse($TargetComputer) | Out-Null
+            $isIPAddress = $true
+            Write-DebugMessage "目标是IP地址: $TargetComputer" "NETWORK"
+        }
+        catch {
+            $isIPAddress = $false
+            Write-DebugMessage "目标是主机名: $TargetComputer" "NETWORK"
+            
+            # 如果是主机名，尝试DNS解析
+            try {
+                Write-DebugMessage "开始DNS解析..." "DNS"
+                $dnsResult = Resolve-DnsName -Name $TargetComputer -ErrorAction SilentlyContinue
+                if ($dnsResult) {
+                    $resolvedIP = $dnsResult | Where-Object { $_.Type -eq 'A' } | Select-Object -First 1 -ExpandProperty IPAddress
+                    Write-DebugMessage "DNS解析成功: $TargetComputer -> $resolvedIP" "DNS"
+                } else {
+                    Write-DebugMessage "DNS解析失败: 无法解析 $TargetComputer" "DNS"
+                }
+            }
+            catch {
+                Write-DebugMessage "DNS解析异常: $($_.Exception.Message)" "DNS"
+            }
+        }
+        
         $pingResult = Test-Connection -ComputerName $TargetComputer -Count 1 -Quiet -ErrorAction SilentlyContinue
+        $endTime = Get-Date
+        $duration = ($endTime - $startTime).TotalMilliseconds
+        
+        Write-DebugMessage "Ping测试耗时: $($duration.ToString('F2'))ms" "NETWORK"
         
         if ($pingResult) {
             Write-ColorMessage "✓ 网络连通性检测成功" $Colors.Success
+            Write-DebugMessage "网络连通性测试成功" "NETWORK"
             return $true
         } else {
             Write-ColorMessage "✗ 网络连通性检测失败" $Colors.Error
+            Write-DebugMessage "网络连通性测试失败" "NETWORK"
             return $false
         }
     }
     catch {
         Write-ColorMessage "✗ 网络连通性检测失败: $($_.Exception.Message)" $Colors.Error
+        Write-DebugMessage "网络连通性测试异常: $($_.Exception.Message)" "ERROR"
         return $false
     }
 }
@@ -192,9 +289,13 @@ function Test-WMIConnection {
     )
     
     Write-ColorMessage "正在测试WMI连接..." $Colors.Info
+    Write-DebugMessage "开始WMI连接测试目标: $ComputerName" "WMI"
     
     try {
+        $startTime = Get-Date
+        
         # 创建CIM会话选项（使用DCOM协议）
+        Write-DebugMessage "创建CIM会话选项 (DCOM协议)" "WMI"
         $sessionOption = New-CimSessionOption -Protocol Dcom
         
         # 创建CIM会话参数
@@ -206,22 +307,39 @@ function Test-WMIConnection {
         
         if ($Credential) {
             $sessionParams['Credential'] = $Credential
+            Write-DebugMessage "使用提供的凭据" "WMI"
+        } else {
+            Write-DebugMessage "使用当前用户凭据" "WMI"
         }
         
         # 创建临时CIM会话进行测试
+        Write-DebugMessage "创建临时CIM会话..." "WMI"
         $testSession = New-CimSession @sessionParams
+        $sessionTime = Get-Date
+        $sessionDuration = ($sessionTime - $startTime).TotalMilliseconds
+        Write-DebugMessage "CIM会话创建耗时: $($sessionDuration.ToString('F2'))ms" "WMI"
+        
+        Write-DebugMessage "执行测试查询 Win32_ComputerSystem..." "WMI"
         $result = Get-CimInstance -CimSession $testSession -ClassName Win32_ComputerSystem | Select-Object -First 1
+        $queryTime = Get-Date
+        Write-DebugMessage "测试查询耗时: $(($queryTime - $sessionTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
         
         # 清理测试会话
         Remove-CimSession -CimSession $testSession
+        $endTime = Get-Date
+        Write-DebugMessage "WMI连接测试总耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
         
         if ($result) {
             Write-ColorMessage "✓ WMI连接测试成功" $Colors.Success
+            Write-DebugMessage "WMI连接测试成功，获取到计算机信息: $($result.Name)" "WMI"
             return $true
         }
     }
     catch {
+        $endTime = Get-Date
         Write-ColorMessage "✗ WMI连接测试失败: $($_.Exception.Message)" $Colors.Warning
+        Write-DebugMessage "WMI连接测试失败耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
+        Write-DebugMessage "WMI连接异常详情: $($_.Exception.Message)" "ERROR"
         # 确保清理会话
         if ($testSession) {
             Remove-CimSession -CimSession $testSession -ErrorAction SilentlyContinue
@@ -305,82 +423,74 @@ function Get-RemoteAdminMembers {
     try {
         $adminMembers = @()
         
-        # 使用高效的ADSI方式直接连接（参考高效脚本）
+        # 直接使用高效的CIM会话方式查询管理员组成员
+        Write-ColorMessage "使用CIM会话查询管理员组成员..." $Colors.Info
+        Write-DebugMessage "开始CIM方式查询管理员组成员" "ADMIN"
+        
         try {
-            Write-ColorMessage "使用ADSI直接连接到管理员组..." $Colors.Info
-            $group = [ADSI]"WinNT://$ComputerName/Administrators,group"
+            $startTime = Get-Date
             
-            foreach ($member in $group.Members()) {
+            # 使用已建立的CIM会话获取计算机名
+            Write-DebugMessage "获取计算机系统信息..." "ADMIN"
+            $computerSystemInfo = Get-CimInstance -CimSession $cimSession -ClassName Win32_ComputerSystem
+            $computerName = $computerSystemInfo.Name
+            $sysTime = Get-Date
+            Write-DebugMessage "获取到计算机名: $computerName，耗时: $(($sysTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "ADMIN"
+            
+            # 使用CIM会话查询组用户关联关系
+            Write-DebugMessage "查询Win32_GroupUser关联关系..." "ADMIN"
+            $groupUsers = Get-CimInstance -CimSession $cimSession -ClassName Win32_GroupUser | 
+                Where-Object { $_.GroupComponent -match "Administrators" }
+            $queryTime = Get-Date
+            Write-DebugMessage "组用户关联查询完成，找到 $($groupUsers.Count) 个关联，耗时: $(($queryTime - $sysTime).TotalMilliseconds.ToString('F2'))ms" "ADMIN"
+            
+            $wmiMembers = @()
+            $processedCount = 0
+            foreach ($groupUser in $groupUsers) {
+                $processedCount++
                 try {
-                    $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
-                    $memberPath = $member.GetType().InvokeMember("ADsPath", 'GetProperty', $null, $member, $null)
-                    $memberType = $member.GetType().InvokeMember("Class", 'GetProperty', $null, $member, $null)
+                    Write-DebugMessage "处理第 $processedCount 个关联: $($groupUser.PartComponent)" "ADMIN"
                     
-                    # 解析成员来源
-                    $principalSource = "Unknown"
-                    if ($memberPath -like "*WinNT://*/") {
-                        # 处理三段式路径：WinNT://DOMAIN/COMPUTER/USER (本地用户)
-                        if ($memberPath -match 'WinNT://([^/]+)/([^/]+)/([^/]+)') {
-                            $domainPart = $matches[1]  # 域名
-                            $computerPart = $matches[2]  # 计算机名
-                            $userPart = $matches[3]  # 用户名
-                            
-                            # 三段式表示本地用户，检查计算机名是否匹配
-                            $targetComputer = $ComputerName.Split('.')[0].ToUpper()  # 提取主机名部分
-                            if ($computerPart.ToUpper() -eq $targetComputer) {
-                                $principalSource = "Local"
-                            } else {
-                                $principalSource = "Domain ($domainPart)"
-                            }
-                        }
-                        # 处理两段式路径：WinNT://DOMAIN/USER (域用户/组)
-                        elseif ($memberPath -match 'WinNT://([^/]+)/(.+)') {
-                            $domainPart = $matches[1]
-                            $namePart = $matches[2]
-                            
-                            # 检查是否是计算机名（本地）
-                            $targetComputer = $ComputerName.Split('.')[0].ToUpper()  # 提取主机名部分
-                            if ($domainPart.ToUpper() -eq $targetComputer) {
-                                $principalSource = "Local"
-                            } else {
-                                # 两段式通常表示域用户/组
-                                $principalSource = "Domain ($domainPart)"
-                            }
+                    # CIM对象的格式是: Win32_UserAccount (Name = "Administrator", Domain = "IMZSPC1097")
+                    if ($groupUser.PartComponent -match 'Win32_UserAccount.*Name = "([^"]+)".*Domain = "([^"]+)"') {
+                        $memberName = $matches[1]
+                        $memberDomain = $matches[2]
+                        $memberType = "User"
+                        
+                        Write-DebugMessage "解析成功 - 用户成员: $memberDomain\$memberName" "ADMIN"
+                        
+                        $wmiMembers += @{
+                            Domain = $memberDomain
+                            Name = $memberName
+                            CimClass = @{ CimClassName = "Win32_UserAccount" }
                         }
                     }
-                    
-                    $adminMembers += @{
-                        Name = $memberName
-                        Type = $memberType
-                        Source = $principalSource
-                        Path = $memberPath
+                    elseif ($groupUser.PartComponent -match 'Win32_Group.*Name = "([^"]+)".*Domain = "([^"]+)"') {
+                        $memberName = $matches[1]
+                        $memberDomain = $matches[2]
+                        $memberType = "Group"
+                        
+                        Write-DebugMessage "解析成功 - 组成员: $memberDomain\$memberName" "ADMIN"
+                        
+                        $wmiMembers += @{
+                            Domain = $memberDomain
+                            Name = $memberName
+                            CimClass = @{ CimClassName = "Win32_Group" }
+                        }
+                    }
+                    else {
+                        Write-DebugMessage "未匹配的组件格式: $($groupUser.PartComponent)" "ADMIN"
                     }
                 }
                 catch {
-                    # 忽略解析错误
+                    Write-DebugMessage "解析第 $processedCount 个组成员失败: $($_.Exception.Message)" "ERROR"
                 }
             }
-        }
-        catch {
-            Write-ColorMessage "ADSI方式获取失败，尝试WMI方式..." $Colors.Warning
             
-            # 如果ADSI失败，尝试使用CIM会话方式（性能更优）
-            Write-ColorMessage "ADSI方式失败，尝试CIM会话备用方法..." $Colors.Warning
+            $parseTime = Get-Date
+            Write-DebugMessage "成员解析完成，成功解析 $($wmiMembers.Count) 个成员，耗时: $(($parseTime - $queryTime).TotalMilliseconds.ToString('F2'))ms" "ADMIN"
             
-            # 使用已建立的CIM会话获取计算机名
-            $computerSystemInfo = Get-CimInstance -CimSession $cimSession -ClassName Win32_ComputerSystem
-            $computerName = $computerSystemInfo.Name
-            
-            # 使用CIM会话和关联查询获取Administrators组成员
-            $adminGroup = Get-CimInstance -CimSession $cimSession -ClassName Win32_Group | 
-                Where-Object { $_.Name -eq "Administrators" -and $_.Domain -eq $computerName }
-            
-            if ($adminGroup) {
-                $wmiMembers = Get-CimAssociatedInstance -CimSession $cimSession -InputObject $adminGroup -ResultClassName Win32_UserAccount, Win32_Group
-            } else {
-                $wmiMembers = @()
-            }
-            
+            # 转换为标准格式
             foreach ($member in $wmiMembers) {
                 try {
                     $memberDomain = $member.Domain
@@ -396,11 +506,20 @@ function Get-RemoteAdminMembers {
                         Source = $principalSource
                         Path = "CIM: $memberDomain\$memberName"
                     }
+                    
+                    Write-DebugMessage "添加管理员成员: $memberName [$memberType] ($principalSource)" "ADMIN"
                 }
                 catch {
-                    # 忽略解析错误
+                    Write-DebugMessage "转换成员格式失败: $($_.Exception.Message)" "ERROR"
                 }
             }
+            
+            $endTime = Get-Date
+            Write-DebugMessage "管理员组查询总耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms，最终获取 $($adminMembers.Count) 个成员" "ADMIN"
+        }
+        catch {
+            Write-DebugMessage "CIM管理员组查询失败: $($_.Exception.Message)" "ERROR"
+            Write-ColorMessage "获取管理员组成员失败: $($_.Exception.Message)" $Colors.Warning
         }
         
         return $adminMembers
@@ -693,26 +812,28 @@ function Get-RemoteSystemInfoWMI {
     }
     
     # 获取当前登录用户
-    if ($Fast) {
-        Write-ColorMessage "快速模式：跳过用户会话查询" $Colors.Warning
-        $info.CurrentUser = "已跳过（快速模式）"
-    } else {
-        try {
-            Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
-            $currentUsers = @()
+    try {
+        Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
+        $currentUsers = @()
         
         # 使用CIM会话的超高效用户查询方法
         Write-ColorMessage "正在查询登录用户（CIM优化方法）..." $Colors.Info
+        Write-DebugMessage "开始用户会话查询" "USER"
         try {
+            $startTime = Get-Date
             $users = @()
             $logonIdMap = @{}
             $validLogonTypes = @(2, 10)  # 交互式和远程交互式
             
             # 使用CIM会话获取登录会话，性能更优
+            Write-DebugMessage "查询Win32_LogonSession..." "USER"
             $logonSessions = Get-CimInstance -CimSession $cimSession -ClassName Win32_LogonSession | 
                 Where-Object { $validLogonTypes -contains $_.LogonType }
+            $sessionTime = Get-Date
+            Write-DebugMessage "登录会话查询耗时: $(($sessionTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "USER"
             
             Write-ColorMessage "找到 $($logonSessions.Count) 个相关登录会话" $Colors.Info
+            Write-DebugMessage "找到 $($logonSessions.Count) 个有效登录会话 (类型: $($validLogonTypes -join ','))" "USER"
             
             # 创建LogonId哈希表以提高查找性能
             foreach ($session in $logonSessions) {
@@ -720,33 +841,100 @@ function Get-RemoteSystemInfoWMI {
             }
             
             # 使用CIM会话预加载用户信息（User-LogonSession关联）
+            Write-DebugMessage "查询Win32_LoggedOnUser关联信息..." "USER"
             $loggedOnUsers = Get-CimInstance -CimSession $cimSession -ClassName Win32_LoggedOnUser
+            $userTime = Get-Date
+            Write-DebugMessage "用户关联查询耗时: $(($userTime - $sessionTime).TotalMilliseconds.ToString('F2'))ms，找到 $($loggedOnUsers.Count) 个关联" "USER"
+            
+            $processedUsers = 0
+            $validUsers = 0
+            $skippedUsers = 0
             
             foreach ($assoc in $loggedOnUsers) {
-                # 使用正则表达式直接提取LogonId，提高性能
-                if ($assoc.Dependent -match 'LogonId="(\d+)"') {
+                $processedUsers++
+                
+                # 使用正则表达式直接提取LogonId，支持CIM对象格式
+                if ($assoc.Dependent -match 'LogonId = "(\d+)"' -or $assoc.Dependent -match 'LogonId="(\d+)"') {
                     $logonId = $matches[1]
                     
                     # 使用哈希表快速检查LogonId是否有效
                     if ($logonIdMap.ContainsKey($logonId)) {
                         try {
-                            # 解析用户信息，支持多种格式
-                            if ($assoc.Antecedent -match 'Win32_UserAccount\.Domain="([^"]+)",Name="([^"]+)"') {
+                            Write-DebugMessage "处理第 $processedUsers 个用户关联，LogonId: $logonId" "USER"
+                            Write-DebugMessage "关联信息: $($assoc.Antecedent)" "USER"
+                            
+                            # 解析用户信息，支持多种格式 - CIM对象格式
+                            if ($assoc.Antecedent -match 'Win32_Account.*Name = "([^"]+)".*Domain = "([^"]+)"') {
+                                $userName = $matches[1]
+                                $userDomain = $matches[2]
+                                $fullName = "$userDomain\$userName"
+                                
+                                Write-DebugMessage "解析成功 - 用户: $fullName" "USER"
+                                
+                                # 使用更严格的真实用户检查
+                                if ((Test-IsRealUser -UserName $userName -UserDomain $userDomain) -and $users -notcontains $fullName) {
+                                    $users += $fullName
+                                    $validUsers++
+                                    Write-DebugMessage "✓ 添加真实用户: $fullName (LogonId: $logonId)" "USER"
+                                } else {
+                                    $skippedUsers++
+                                    if ($users -contains $fullName) {
+                                        Write-DebugMessage "✗ 跳过重复用户: $fullName" "USER"
+                                    } else {
+                                        Write-DebugMessage "✗ 跳过系统虚拟账户: $fullName" "USER"
+                                    }
+                                }
+                            }
+                            elseif ($assoc.Antecedent -match 'Win32_UserAccount[^"]*Domain="([^"]+)"[^"]*Name="([^"]+)"') {
                                 $userDomain = $matches[1]
                                 $userName = $matches[2]
                                 $fullName = "$userDomain\$userName"
                                 
-                                # 排除系统虚拟账户和重复用户
-                                if ($fullName -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE)' -and $users -notcontains $fullName) {
+                                Write-DebugMessage "解析成功 - 用户: $fullName" "USER"
+                                
+                                # 使用更严格的真实用户检查
+                                if ((Test-IsRealUser -UserName $userName -UserDomain $userDomain) -and $users -notcontains $fullName) {
                                     $users += $fullName
+                                    $validUsers++
+                                    Write-DebugMessage "✓ 添加真实用户: $fullName (LogonId: $logonId)" "USER"
+                                } else {
+                                    $skippedUsers++
+                                    if ($users -contains $fullName) {
+                                        Write-DebugMessage "✗ 跳过重复用户: $fullName" "USER"
+                                    } else {
+                                        Write-DebugMessage "✗ 跳过系统虚拟账户: $fullName" "USER"
+                                    }
                                 }
                             }
+                            elseif ($assoc.Antecedent -match 'Win32_Group[^"]*Domain="([^"]+)"[^"]*Name="([^"]+)"') {
+                                $userDomain = $matches[1]
+                                $userName = $matches[2]
+                                $fullName = "$userDomain\$userName"
+                                $skippedUsers++
+                                
+                                Write-DebugMessage "✗ 跳过组对象: $fullName" "USER"
+                            }
+                            else {
+                                $skippedUsers++
+                                Write-DebugMessage "✗ 未匹配的用户格式: $($assoc.Antecedent)" "USER"
+                            }
                         } catch {
-                            # 忽略解析失败的用户
+                            $skippedUsers++
+                            Write-DebugMessage "✗ 解析第 $processedUsers 个用户失败: $($_.Exception.Message)" "ERROR"
                         }
+                    } else {
+                        $skippedUsers++
+                        Write-DebugMessage "✗ LogonId $logonId 不在有效会话中，跳过" "USER"
                     }
+                } else {
+                    $skippedUsers++
+                    Write-DebugMessage "✗ 无法提取LogonId，跳过关联: $($assoc.Dependent)" "USER"
                 }
             }
+            
+            $endTime = Get-Date
+            Write-DebugMessage "用户查询统计: 总关联数=$processedUsers, 有效用户=$validUsers, 跳过数=$skippedUsers, 最终用户数=$($users.Count)" "USER"
+            Write-DebugMessage "用户查询总耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "USER"
             
             if ($users.Count -gt 0) {
                 $currentUsers = $users
@@ -810,36 +998,64 @@ function Get-RemoteSystemInfoWMI {
         catch {
             $info.CurrentUser = "获取用户信息失败: $($_.Exception.Message)"
         }
-    }
     
     # 获取网络适配器信息（使用CIM会话优化性能）
     $info.NetworkAdapters = @()
     
     Write-ColorMessage "正在获取网络适配器信息..." $Colors.Info
+    Write-DebugMessage "开始网络适配器查询" "NETWORK"
+    
     try {
-        # 使用CIM会话一次性获取所有网络配置信息
-        $networkConfigs = Get-CimInstance -CimSession $cimSession -ClassName Win32_NetworkAdapterConfiguration | 
-            Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -and $_.MACAddress }
+        $startTime = Get-Date
         
+        # 使用CIM会话一次性获取所有网络配置信息
+        Write-DebugMessage "查询Win32_NetworkAdapterConfiguration..." "NETWORK"
+        $allNetworkConfigs = Get-CimInstance -CimSession $cimSession -ClassName Win32_NetworkAdapterConfiguration
+        $queryTime = Get-Date
+        Write-DebugMessage "网络配置查询完成，找到 $($allNetworkConfigs.Count) 个配置，耗时: $(($queryTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "NETWORK"
+        
+        # 过滤有效的网络配置
+        $networkConfigs = $allNetworkConfigs | Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -and $_.MACAddress }
+        Write-DebugMessage "过滤后有效网络配置: $($networkConfigs.Count) 个" "NETWORK"
+        
+        $adapterCount = 0
         foreach ($config in $networkConfigs) {
+            $adapterCount++
             if ($config.IPAddress) {
+                Write-DebugMessage "处理第 $adapterCount 个适配器: $($config.Description)" "NETWORK"
+                Write-DebugMessage "IP地址: $($config.IPAddress[0]), MAC: $($config.MACAddress)" "NETWORK"
+                
                 # 获取DNS服务器信息
                 $dnsServers = @()
                 if ($config.DNSServerSearchOrder) {
-                    $dnsServers = $config.DNSServerSearchOrder | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                    $allDNS = $config.DNSServerSearchOrder
+                    $dnsServers = $allDNS | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                    Write-DebugMessage "DNS服务器: $($dnsServers -join ', ') (过滤前: $($allDNS -join ', '))" "NETWORK"
+                } else {
+                    Write-DebugMessage "未配置DNS服务器" "NETWORK"
                 }
+                
+                # 判断网卡类型
+                $adapterType = if ($config.Description -like "*Virtual*" -or $config.Description -like "*VMware*" -or $config.Description -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
+                Write-DebugMessage "适配器类型: $adapterType" "NETWORK"
                 
                 $info.NetworkAdapters += @{
                     Name = if ($config.Description) { $config.Description } else { "Unknown Adapter" }
                     IPAddress = $config.IPAddress[0]
                     MACAddress = $config.MACAddress
                     DNSServers = $dnsServers
-                    Type = if ($config.Description -like "*Virtual*" -or $config.Description -like "*VMware*" -or $config.Description -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
+                    Type = $adapterType
                 }
+                
+                Write-DebugMessage "✓ 添加网络适配器: $($config.Description)" "NETWORK"
             }
         }
+        
+        $endTime = Get-Date
+        Write-DebugMessage "网络适配器查询总耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms，获取 $($info.NetworkAdapters.Count) 个有效适配器" "NETWORK"
     }
     catch {
+        Write-DebugMessage "网络适配器查询失败: $($_.Exception.Message)" "ERROR"
         Write-ColorMessage "获取网络适配器信息失败: $($_.Exception.Message)" $Colors.Warning
         $info.NetworkAdapters = @()
     }
@@ -853,13 +1069,8 @@ function Get-RemoteSystemInfoWMI {
     $info.TotalMemoryGB = [math]::Round($computerInfo.TotalPhysicalMemory / 1GB, 2)
     
     # 获取远程Administrators组成员
-    if ($Fast) {
-        Write-ColorMessage "快速模式：跳过Administrators组成员查询" $Colors.Warning
-        $info.AdminMembers = @()
-    } else {
-        Write-ColorMessage "正在获取Administrators组成员..." $Colors.Info
-        $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential -CimSession $cimSession
-    }
+    Write-ColorMessage "正在获取Administrators组成员..." $Colors.Info
+    $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential -CimSession $cimSession
     
     # 清理CIM会话
     if ($cimSession) {
@@ -955,32 +1166,50 @@ function Show-SystemInfo {
     $outputContent += "Administrators组成员:"
     $outputContent += "-" * 30
     
-    if ($Fast) {
-        Write-ColorMessage "已跳过Administrators组成员查询（快速模式）" $Colors.Info
-        $outputContent += "已跳过Administrators组成员查询（快速模式）"
-    } elseif ($SystemInfo.AdminMembers -and $SystemInfo.AdminMembers.Count -gt 0) {
+    if ($SystemInfo.AdminMembers -and $SystemInfo.AdminMembers.Count -gt 0) {
         # 分类显示成员
         $localMembers = @()
         $domainMembers = @()
         
         foreach ($member in $SystemInfo.AdminMembers) {
-            # 根据路径判断是本地还是域成员
+            # 使用Source字段判断是本地还是域成员（更准确）
             $isLocal = $false
             
-            if ($member.Path -match 'WinNT://([^/]+)/([^/]+)/([^/]+)') {
-                # 三段式路径：WinNT://DOMAIN/COMPUTER/USER (本地成员)
+            if ($member.Source -eq "Local") {
                 $isLocal = $true
-            } elseif ($member.Path -match 'WinNT://([^/]+)/(.+)') {
-                # 两段式路径：WinNT://DOMAIN/USER (可能是域成员或本地成员)
-                $domainPart = $matches[1]
-                $namePart = $matches[2]
-                
-                # 检查是否是计算机名
-                if ($IsRemoteQuery) {
-                    $targetComputer = $ComputerName.Split('.')[0].ToUpper()
-                    $isLocal = ($domainPart.ToUpper() -eq $targetComputer)
-                } else {
-                    $isLocal = ($domainPart.ToUpper() -eq $env:COMPUTERNAME.ToUpper())
+            } elseif ($member.Source -like "Domain (*") {
+                $isLocal = $false
+            } else {
+                # 备用判断：如果Source字段不明确，则根据路径判断
+                if ($member.Path -match 'WinNT://([^/]+)/([^/]+)/([^/]+)') {
+                    # 三段式路径：WinNT://DOMAIN/COMPUTER/USER (本地成员)
+                    $isLocal = $true
+                } elseif ($member.Path -match 'WinNT://([^/]+)/(.+)') {
+                    # 两段式路径：WinNT://DOMAIN/USER (可能是域成员或本地成员)
+                    $domainPart = $matches[1]
+                    $namePart = $matches[2]
+                    
+                    # 检查是否是计算机名
+                    if ($IsRemoteQuery) {
+                        $targetComputer = $ComputerName.Split('.')[0].ToUpper()
+                        $isLocal = ($domainPart.ToUpper() -eq $targetComputer)
+                    } else {
+                        $isLocal = ($domainPart.ToUpper() -eq $env:COMPUTERNAME.ToUpper())
+                    }
+                } elseif ($member.Path -like "CIM: *") {
+                    # CIM格式：CIM: DOMAIN\USER
+                    if ($member.Path -match 'CIM: ([^\\]+)\\(.+)') {
+                        $domainPart = $matches[1]
+                        $namePart = $matches[2]
+                        
+                        # 检查是否是计算机名
+                        if ($IsRemoteQuery) {
+                            $targetComputer = $ComputerName.Split('.')[0].ToUpper()
+                            $isLocal = ($domainPart.ToUpper() -eq $targetComputer)
+                        } else {
+                            $isLocal = ($domainPart.ToUpper() -eq $env:COMPUTERNAME.ToUpper())
+                        }
+                    }
                 }
             }
             
