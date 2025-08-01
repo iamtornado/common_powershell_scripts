@@ -29,6 +29,9 @@
 .PARAMETER UseWinRM
     强制尝试使用WinRM连接。默认情况下直接使用WMI连接以提高速度。
 
+.PARAMETER Fast
+    快速模式：跳过耗时的查询（用户会话、管理员组成员），只获取基本系统信息。
+
 .EXAMPLE
     .\Get-SystemInfo.ps1
     查询本地计算机信息
@@ -49,9 +52,13 @@
     .\Get-SystemInfo.ps1 -ComputerName "SERVER01" -UseWinRM
     强制使用WinRM连接查询远程计算机（默认使用更快的WMI连接）
 
+.EXAMPLE
+    .\Get-SystemInfo.ps1 -ComputerName "10.65.37.46" -Fast
+    快速模式查询远程计算机（跳过用户会话和管理员组成员查询）
+
 .NOTES
     作者: tornadoami
-    版本: 2.0
+    版本: 2.2
     创建日期: 2025-08-01
     要求: PowerShell 5.1+, Windows 7+
     
@@ -82,7 +89,10 @@ param(
     [int]$Timeout = 30,
 
     [Parameter(Mandatory = $false)]
-    [switch]$UseWinRM
+    [switch]$UseWinRM,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Fast
 )
 
 # 设置错误处理
@@ -283,6 +293,7 @@ function Get-RemoteAdminMembers {
         
         # 首先尝试使用ADSI方式（参考ADSI脚本）
         try {
+            Write-ColorMessage "尝试通过ADSI获取管理员组成员..." $Colors.Info
             $group = [ADSI]"WinNT://$ComputerName/Administrators,group"
             
             foreach ($member in $group.Members()) {
@@ -630,16 +641,23 @@ function Get-RemoteSystemInfoWMI {
             # 如果计算机加入了域，使用 计算机名.域名 格式
             $info.ComputerName = "$computerName.$domainName"
         } else {
-            # 如果不在域中，尝试通过DNS解析获取完整FQDN
+            # 如果不在域中，检查是否为IP地址
+            # 检查输入的ComputerName是否为IP地址
+            $isIPAddress = $false
             try {
-                $resolvedName = [System.Net.Dns]::GetHostEntry($ComputerName).HostName
-                if ($resolvedName -and $resolvedName -ne $ComputerName -and $resolvedName -like "*.*") {
-                    $info.ComputerName = $resolvedName
-                } else {
-                    $info.ComputerName = $computerName
-                }
+                [System.Net.IPAddress]::Parse($ComputerName) | Out-Null
+                $isIPAddress = $true
             }
             catch {
+                $isIPAddress = $false
+            }
+            
+            if ($isIPAddress) {
+                # 对于IP地址，直接使用计算机名，不进行DNS反向解析以避免性能问题
+                Write-ColorMessage "检测到IP地址，跳过DNS反向解析以提高性能" $Colors.Info
+                $info.ComputerName = $computerName
+            } else {
+                # 对于域名，使用基本计算机名
                 $info.ComputerName = $computerName
             }
         }
@@ -650,25 +668,43 @@ function Get-RemoteSystemInfoWMI {
     }
     
     # 获取当前登录用户
-    try {
-        Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
-        $currentUsers = @()
+    if ($Fast) {
+        Write-ColorMessage "快速模式：跳过用户会话查询" $Colors.Warning
+        $info.CurrentUser = "已跳过（快速模式）"
+    } else {
+        try {
+            Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
+            $currentUsers = @()
         
-        # 方法1：获取所有登录会话（包括更多登录类型）
-        $logonSessions = Get-WmiObject -Class Win32_LogonSession @params | 
-            Where-Object { 
-                $_.LogonType -eq 2 -or     # 交互式
-                $_.LogonType -eq 10 -or    # 远程交互式
-                $_.LogonType -eq 11 -or    # 缓存交互式
-                $_.LogonType -eq 7         # 解锁
-            }
+        # 方法1：获取所有登录会话（只查询真正的交互式会话以提高性能）
+        Write-ColorMessage "正在查询登录会话..." $Colors.Info
+        try {
+            # 只查询交互式和远程交互式会话，排除缓存交互式以提高性能
+            $logonSessions = Get-WmiObject -Class Win32_LogonSession @params | 
+                Where-Object { 
+                    $_.LogonType -eq 2 -or     # 交互式
+                    $_.LogonType -eq 10        # 远程交互式
+                } | Select-Object -First 3    # 限制最多3个会话以提高性能
+        }
+        catch {
+            Write-ColorMessage "登录会话查询失败，尝试快速方法..." $Colors.Warning
+            $logonSessions = @()
+        }
         
         Write-ColorMessage "找到 $($logonSessions.Count) 个登录会话" $Colors.Info
         
         foreach ($session in $logonSessions) {
             $logonId = $session.LogonId
-            $loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser @params | 
-                Where-Object { $_.Dependent -match "LogonId=`"$logonId`"" }
+            
+            # 直接查询用户，限制结果数量
+            try {
+                $loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser @params | 
+                    Where-Object { $_.Dependent -match "LogonId=`"$logonId`"" } |
+                    Select-Object -First 1  # 每个会话只取第一个用户以提高性能
+            }
+            catch {
+                continue  # 跳过这个会话
+            }
             
             foreach ($user in $loggedOnUsers) {
                 try {
@@ -755,20 +791,30 @@ function Get-RemoteSystemInfoWMI {
         } else {
             $info.CurrentUser = "无活动用户会话"
         }
-    }
-    catch {
-        $info.CurrentUser = "获取用户信息失败: $($_.Exception.Message)"
+        }
+        catch {
+            $info.CurrentUser = "获取用户信息失败: $($_.Exception.Message)"
+        }
     }
     
-    # 获取网络适配器信息
+    # 获取网络适配器信息（高度优化查询性能）
     $info.NetworkAdapters = @()
-    $networkAdapters = Get-WmiObject -Class Win32_NetworkAdapter @params | Where-Object { $_.NetConnectionStatus -eq 2 }
     
-    foreach ($adapter in $networkAdapters) {
-        if ($adapter.MACAddress -and $adapter.NetConnectionID) {
-            $adapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration @params | Where-Object { $_.Index -eq $adapter.Index }
-            
-            if ($adapterConfig -and $adapterConfig.IPAddress) {
+    Write-ColorMessage "正在获取网络适配器信息..." $Colors.Info
+    try {
+        # 一次性获取所有数据，避免重复查询
+        $allAdapterConfigs = Get-WmiObject -Class Win32_NetworkAdapterConfiguration @params | Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -and $_.MACAddress }
+        $allAdapters = Get-WmiObject -Class Win32_NetworkAdapter @params
+        
+        # 创建索引映射以提高查找性能
+        $adapterLookup = @{}
+        foreach ($adapter in $allAdapters) {
+            $adapterLookup[$adapter.Index] = $adapter
+        }
+        
+        foreach ($adapterConfig in $allAdapterConfigs) {
+            $adapter = $adapterLookup[$adapterConfig.Index]
+            if ($adapter) {
                 # 获取DNS服务器信息
                 $dnsServers = @()
                 if ($adapterConfig.DNSServerSearchOrder) {
@@ -776,14 +822,18 @@ function Get-RemoteSystemInfoWMI {
                 }
                 
                 $info.NetworkAdapters += @{
-                    Name = $adapter.NetConnectionID
+                    Name = if ($adapter.NetConnectionID) { $adapter.NetConnectionID } else { $adapter.Name }
                     IPAddress = $adapterConfig.IPAddress[0]
-                    MACAddress = $adapter.MACAddress
+                    MACAddress = $adapterConfig.MACAddress
                     DNSServers = $dnsServers
                     Type = if ($adapter.Name -like "*Virtual*" -or $adapter.Name -like "*VMware*" -or $adapter.Name -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
                 }
             }
         }
+    }
+    catch {
+        Write-ColorMessage "获取网络适配器信息失败: $($_.Exception.Message)" $Colors.Warning
+        $info.NetworkAdapters = @()
     }
     
     # 获取系统详细信息
@@ -795,8 +845,13 @@ function Get-RemoteSystemInfoWMI {
     $info.TotalMemoryGB = [math]::Round($computerInfo.TotalPhysicalMemory / 1GB, 2)
     
     # 获取远程Administrators组成员
-    Write-ColorMessage "正在获取Administrators组成员..." $Colors.Info
-    $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential
+    if ($Fast) {
+        Write-ColorMessage "快速模式：跳过Administrators组成员查询" $Colors.Warning
+        $info.AdminMembers = @()
+    } else {
+        Write-ColorMessage "正在获取Administrators组成员..." $Colors.Info
+        $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential
+    }
     
     return $info
 }
@@ -878,7 +933,10 @@ function Show-SystemInfo {
     $outputContent += "Administrators组成员:"
     $outputContent += "-" * 30
     
-    if ($SystemInfo.AdminMembers -and $SystemInfo.AdminMembers.Count -gt 0) {
+    if ($Fast) {
+        Write-ColorMessage "已跳过Administrators组成员查询（快速模式）" $Colors.Info
+        $outputContent += "已跳过Administrators组成员查询（快速模式）"
+    } elseif ($SystemInfo.AdminMembers -and $SystemInfo.AdminMembers.Count -gt 0) {
         # 分类显示成员
         $localMembers = @()
         $domainMembers = @()
