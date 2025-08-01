@@ -10,8 +10,8 @@
 ### ✨ 主要特性
 
 - 🖥️ **本地/远程查询**：支持本地计算机和远程Windows计算机信息查询
-- 🔗 **智能连接**：自动选择最佳远程连接方式（WinRM优先，DCOM/WMI备用）
-- 🌐 **网络配置**：智能检测所有活动网卡（包括虚拟网卡）的IP和MAC地址
+- 🔗 **智能连接**：默认使用快速WMI连接，可选启用WinRM连接测试
+- 🌐 **网络配置**：智能检测所有活动网卡（包括虚拟网卡）的IP、MAC地址和DNS服务器
 - 💾 **系统详情**：操作系统版本、架构、制造商、型号、内存信息
 - 🔐 **凭据支持**：支持使用自定义凭据连接远程计算机
 - 📋 **自动复制**：结果自动复制到剪切板，可直接粘贴发送
@@ -45,6 +45,9 @@ $cred = Get-Credential
 
 # 远程查询并保存到文件
 .\Get-SystemInfo.ps1 -ComputerName "SERVER01" -SaveToFile -OutputPath "Server01_Info.txt"
+
+# 强制使用WinRM连接（默认使用更快的WMI连接）
+.\Get-SystemInfo.ps1 -ComputerName "SERVER01" -UseWinRM
 ```
 
 ## 📝 输出示例
@@ -69,10 +72,12 @@ $cred = Get-Credential
 网卡 1 - 以太网 (物理网卡)
   IP地址: 192.168.1.100
   MAC地址: AA-BB-CC-DD-EE-FF
+  DNS服务器: 192.168.1.1, 8.8.8.8
 
 网卡 2 - vEthernet (external) (虚拟网卡)
   IP地址: 192.168.124.11
   MAC地址: 00-15-5D-7C-0B-00
+  DNS服务器: 192.168.124.7, 223.5.5.5
 
 操作系统: Microsoft Windows 11 专业版
 系统版本: 10.0.22631
@@ -99,6 +104,7 @@ $cred = Get-Credential
 开始远程系统信息查询...
 正在检测网络连通性...
 ✓ 网络连通性检测成功
+用户指定使用WinRM，正在测试WinRM连接...
 正在测试WinRM连接...
 ✓ WinRM连接测试成功
 ✓ 使用WinRM连接方式
@@ -110,6 +116,7 @@ $cred = Get-Credential
 网卡 1 - 以太网 (物理网卡)
   IP地址: 192.168.1.50
   MAC地址: 00-50-56-C0-00-01
+  DNS服务器: 192.168.1.1, 192.168.1.2
 
 操作系统: Microsoft Windows Server 2022 Standard
 系统版本: 10.0.20348
@@ -136,47 +143,62 @@ $cred = Get-Credential
 | `-OutputPath` | String | 输出文件路径 | `"SystemInfo.txt"` |
 | `-Force` | Switch | 强制执行，跳过确认提示 | `$false` |
 | `-Timeout` | Int | 远程连接超时时间（秒） | `30` |
+| `-UseWinRM` | Switch | 强制尝试使用WinRM连接（默认使用WMI） | `$false` |
 
 ## 🔗 远程连接说明
 
 ### 连接方式优先级
 
-脚本会自动测试并选择最佳的远程连接方式：
+脚本默认使用快速的WMI连接，可选择启用WinRM测试：
 
-1. **WinRM (Windows Remote Management)** - 优先选择
+1. **WMI (Windows Management Instrumentation)** - 默认选择
+   - 兼容性好，适用于所有Windows版本
+   - 无需额外配置，开箱即用
+
+2. **WinRM (Windows Remote Management)** - 可选启用
    - 现代化的远程管理协议
-   - 更好的安全性和性能
-   - 支持完整的PowerShell远程功能
-
-2. **DCOM/WMI (Distributed COM)** - 备用方案
-   - 传统的Windows远程管理方式
-   - 兼容性更好，适用于旧版本系统
-   - 部分功能可能受限
+   - 更好的安全性和PowerShell集成
+   - 需要目标计算机启用WinRM服务
+   - 使用 `-UseWinRM` 参数启用
 
 ### 连接测试流程
 
+**默认模式（快速，基于DCOM的WMI）：**
 ```
-网络连通性测试 → WinRM连接测试 → WMI连接测试 → 选择可用方式
+网络连通性测试 → WMI连接测试 → 获取系统信息
      ↓               ↓               ↓
-   PING测试      Test-WSMan      WMI查询测试
+   PING测试      WMI查询测试      完成（约0.6秒）
+```
+
+**WinRM模式（使用 -UseWinRM）：**
+```
+网络连通性测试 → WinRM连接测试 → WMI连接测试（备用）
+     ↓               ↓               ↓        
+   PING测试      Test-WSMan      WMI查询测试   
 ```
 
 ## 🌐 网络检测说明
 
-脚本能够智能检测各种网络适配器：
+脚本能够智能检测各种网络适配器并获取完整配置信息：
 
 ### ✅ 支持的网卡类型
-- 物理以太网卡
-- 无线网卡
-- Hyper-V虚拟网卡
-- VMware虚拟网卡
-- Docker网络适配器
+- 物理以太网卡（IP、MAC、DNS）
+- 无线网卡（IP、MAC、DNS）
+- Hyper-V虚拟网卡（IP、MAC、DNS）
+- VMware虚拟网卡（IP、MAC、DNS）
+- Docker网络适配器（IP、MAC、DNS）
 
 ### ❌ 自动过滤的网卡
 - 回环适配器 (Loopback)
 - Teredo隧道适配器
 - ISATAP适配器
 - 蓝牙网络适配器
+
+### 🔍 DNS服务器检测
+- **本地查询**：使用 `Get-DnsClientServerAddress` 获取DNS配置
+- **远程查询**：通过WMI `Win32_NetworkAdapterConfiguration` 获取DNS信息
+- **智能过滤**：自动过滤本地回环地址（127.0.0.1、::1）
+- **显示逻辑**：区分已配置DNS和未配置/自动获取的情况
 
 ## 💼 适用场景
 
@@ -222,12 +244,13 @@ $cred = Get-Credential
 - **PowerShell Remoting**：WinRM远程执行
 - **PowerShell CIM/WMI**：系统信息获取
 - **Net-* Cmdlets**：网络配置查询
+- **Get-DnsClientServerAddress**：DNS服务器查询
 - **System.Net.Dns**：FQDN解析
 - **Set-Clipboard**：剪切板操作
 
 ### 关键特性
-- **智能连接选择**：自动测试并选择最佳远程连接方式
-- **智能网卡检测**：自动识别物理和虚拟网卡
+- **快速连接模式**：默认使用WMI连接，可选WinRM测试
+- **智能网卡检测**：自动识别物理和虚拟网卡，获取DNS配置
 - **凭据管理**：安全的远程认证处理
 - **错误处理**：完善的异常捕获和处理
 - **编码支持**：正确显示中文字符
@@ -238,7 +261,6 @@ $cred = Get-Credential
 ```
 系统信息查询工具/
 ├── Get-SystemInfo.ps1    # 主脚本文件（支持本地/远程查询）
-├── Test-Clipboard.ps1    # 剪切板测试工具
 └── README.md            # 本文档
 ```
 
@@ -250,10 +272,10 @@ $cred = Get-Credential
 A: 这通常是因为网卡驱动问题或网络配置异常，脚本会尝试检测所有可用的网络适配器。
 
 **Q: 剪切板复制失败**  
-A: 可能是PowerShell版本较低或系统权限限制，可以使用 `-SaveToFile` 参数保存到文件。
+A: 可能是PowerShell版本较低或系统权限限制，可以使用 `-SaveToFile` 参数保存到文件，或手工复制截图。
 
 **Q: 中文显示乱码**  
-A: 脚本已设置UTF-8编码，如仍有问题请检查PowerShell控制台编码设置。
+A: 脚本已设置UTF8BOM编码，如仍有问题请检查PowerShell控制台编码设置。
 
 ### 远程查询问题
 
@@ -277,13 +299,6 @@ A: 确保使用的凭据具有目标计算机的管理员权限。
 **Q: 远程查询速度慢**  
 A: WMI方式通常比WinRM慢，建议优先配置WinRM服务。
 
-### 测试工具
-
-使用附带的测试脚本验证剪切板功能：
-
-```powershell
-.\Test-Clipboard.ps1
-```
 
 ## 📄 许可证
 
@@ -303,17 +318,24 @@ A: WMI方式通常比WinRM慢，建议优先配置WinRM服务。
 
 如有问题或建议，请通过以下方式联系：
 
-- 📧 Email: [您的邮箱]
-- 🐛 Issues: [GitHub Issues链接]
-- 💬 讨论: [GitHub Discussions链接]
+- 📧 Email: [1426693333@qq.com]
+- 🐛 Issues: [[GitHub Issues链接](https://github.com/iamtornado/common_powershell_scripts/issues)]
+- 💬 讨论: [[GitHub Discussions链接](https://github.com/iamtornado/common_powershell_scripts/discussions)]
 
 ---
 
-**版本**: 2.0  
-**最后更新**: 2025-07-31  
+**版本**: 2.1  
+**最后更新**: 2025-08-01  
 **作者**: tornadoami
 
 ## 📈 版本历史
+
+### v2.1 (2025-08-01)
+- 🌐 **新增DNS服务器查询**：显示每个网卡的DNS配置信息
+- ⚡ **优化连接性能**：默认使用快速WMI连接（0.6秒 vs 8秒）
+- 🔧 **新增UseWinRM参数**：可选启用WinRM连接测试
+- 🏠 **管理员组成员分类**：清晰区分本地成员和域成员
+- 🎨 **醒目剪切板提示**：彩色图标和背景色提示信息复制状态
 
 ### v2.0 (2025-07-31)
 - ✨ 新增远程计算机查询功能

@@ -430,10 +430,23 @@ function Get-LocalSystemInfo {
                        Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.IPAddress -ne "0.0.0.0" }
             
             if ($ipConfig) {
+                # 获取DNS服务器信息
+                $dnsServers = @()
+                try {
+                    $dnsConfig = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+                    if ($dnsConfig -and $dnsConfig.ServerAddresses) {
+                        $dnsServers = $dnsConfig.ServerAddresses | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                    }
+                }
+                catch {
+                    # 忽略DNS查询错误
+                }
+                
                 $info.NetworkAdapters += @{
                     Name = $adapter.Name
                     IPAddress = $ipConfig.IPAddress
                     MACAddress = $adapter.MacAddress
+                    DNSServers = $dnsServers
                     Type = if ($adapter.Virtual) { "虚拟网卡" } else { "物理网卡" }
                 }
             }
@@ -490,10 +503,23 @@ function Get-RemoteSystemInfoWinRM {
                    Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.IPAddress -ne "0.0.0.0" }
         
         if ($ipConfig) {
+                # 获取DNS服务器信息
+                $dnsServers = @()
+                try {
+                    $dnsConfig = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+                    if ($dnsConfig -and $dnsConfig.ServerAddresses) {
+                        $dnsServers = $dnsConfig.ServerAddresses | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                    }
+                }
+                catch {
+                    # 忽略DNS查询错误
+                }
+                
                 $result.NetworkAdapters += @{
                     Name = $adapter.Name
                     IPAddress = $ipConfig.IPAddress
                     MACAddress = $adapter.MacAddress
+                    DNSServers = $dnsServers
                     Type = if ($adapter.Virtual) { "虚拟网卡" } else { "物理网卡" }
                 }
             }
@@ -743,10 +769,17 @@ function Get-RemoteSystemInfoWMI {
             $adapterConfig = Get-WmiObject -Class Win32_NetworkAdapterConfiguration @params | Where-Object { $_.Index -eq $adapter.Index }
             
             if ($adapterConfig -and $adapterConfig.IPAddress) {
+                # 获取DNS服务器信息
+                $dnsServers = @()
+                if ($adapterConfig.DNSServerSearchOrder) {
+                    $dnsServers = $adapterConfig.DNSServerSearchOrder | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                }
+                
                 $info.NetworkAdapters += @{
                     Name = $adapter.NetConnectionID
                     IPAddress = $adapterConfig.IPAddress[0]
                     MACAddress = $adapter.MACAddress
+                    DNSServers = $dnsServers
                     Type = if ($adapter.Name -like "*Virtual*" -or $adapter.Name -like "*VMware*" -or $adapter.Name -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
                 }
             }
@@ -800,9 +833,21 @@ function Show-SystemInfo {
             Write-ColorMessage "  IP地址: $($adapter.IPAddress)" $Colors.Success
             Write-ColorMessage "  MAC地址: $($adapter.MACAddress)" $Colors.Success
             
-            $outputContent += "网卡 $adapterCount - $($adapter.Name) ($($adapter.Type))"
-            $outputContent += "  IP地址: $($adapter.IPAddress)"
-            $outputContent += "  MAC地址: $($adapter.MACAddress)"
+            # 显示DNS服务器
+            if ($adapter.DNSServers -and $adapter.DNSServers.Count -gt 0) {
+                $dnsString = $adapter.DNSServers -join ", "
+                Write-ColorMessage "  DNS服务器: $dnsString" $Colors.Success
+                $outputContent += "网卡 $adapterCount - $($adapter.Name) ($($adapter.Type))"
+                $outputContent += "  IP地址: $($adapter.IPAddress)"
+                $outputContent += "  MAC地址: $($adapter.MACAddress)"
+                $outputContent += "  DNS服务器: $dnsString"
+            } else {
+                Write-ColorMessage "  DNS服务器: 未配置或自动获取" $Colors.Info
+                $outputContent += "网卡 $adapterCount - $($adapter.Name) ($($adapter.Type))"
+                $outputContent += "  IP地址: $($adapter.IPAddress)"
+                $outputContent += "  MAC地址: $($adapter.MACAddress)"
+                $outputContent += "  DNS服务器: 未配置或自动获取"
+            }
             $outputContent += ""
         }
     } else {
@@ -1086,6 +1131,7 @@ Write-Host ""
     }
     Write-ColorMessage "4. 如需保存到文件，请使用 -SaveToFile 参数" $Colors.Info
     Write-ColorMessage "5. 按任意键退出..." $Colors.Info
+    Write-ColorMessage "6. 请勿用鼠标操作本窗口，否则会复制失败" $Colors.Warning
     
     try {
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
