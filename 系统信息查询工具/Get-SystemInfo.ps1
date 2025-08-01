@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     此脚本能够获取本地或远程Windows计算机的详细系统信息，包括计算机名、用户信息、
-    网络配置、系统详情等。支持多种远程连接方式（WinRM优先，DCOM/WMI备用）。
+    网络配置、系统详情等。使用高效的基于DCOM的CIM会话进行远程连接。
 
 .PARAMETER ComputerName
     目标计算机名称或IP地址。如果不指定，则查询本地计算机。
@@ -25,9 +25,6 @@
 
 .PARAMETER Timeout
     远程连接超时时间（秒），默认为30秒
-
-.PARAMETER UseWinRM
-    强制尝试使用WinRM连接。默认情况下直接使用WMI连接以提高速度。
 
 .PARAMETER OutputDebug
     输出详细的调试信息，便于故障排查和性能分析。
@@ -49,10 +46,6 @@
     查询远程计算机并保存到指定文件
 
 .EXAMPLE
-    .\Get-SystemInfo.ps1 -ComputerName "SERVER01" -UseWinRM
-    强制使用WinRM连接查询远程计算机（默认使用更快的WMI连接）
-
-.EXAMPLE
     .\Get-SystemInfo.ps1 -ComputerName "10.65.37.46"
     查询远程计算机信息
 
@@ -62,13 +55,12 @@
 
 .NOTES
     作者: tornadoami
-    版本: 2.9
+    版本: 3.0
     创建日期: 2025-08-01
     要求: PowerShell 5.1+, Windows 7+
     
-    远程连接优先级：
-    1. WinRM (Windows Remote Management) - 优先选择
-    2. DCOM/WMI (Distributed COM) - 备用方案
+    远程连接方式：
+    基于DCOM的CIM会话 - 高效稳定的远程连接方案
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -91,9 +83,6 @@ param(
     [Parameter(Mandatory = $false)]
     [ValidateRange(5, 300)]
     [int]$Timeout = 30,
-
-    [Parameter(Mandatory = $false)]
-    [switch]$UseWinRM,
 
     [Parameter(Mandatory = $false)]
     [switch]$OutputDebug
@@ -247,39 +236,7 @@ function Test-NetworkConnectivity {
     }
 }
 
-# 函数：测试WinRM连接
-function Test-WinRMConnection {
-    param(
-        [string]$ComputerName,
-        [System.Management.Automation.PSCredential]$Credential
-    )
-    
-    Write-ColorMessage "正在测试WinRM连接..." $Colors.Info
-    
-    try {
-        $params = @{
-            ComputerName = $ComputerName
-            ErrorAction = 'Stop'
-        }
-        
-        if ($Credential) {
-            $params['Credential'] = $Credential
-        }
-        
-        $result = Test-WSMan @params
-        
-        if ($result) {
-            Write-ColorMessage "✓ WinRM连接测试成功" $Colors.Success
-            return $true
-        }
-    }
-    catch {
-        Write-ColorMessage "✗ WinRM连接测试失败: $($_.Exception.Message)" $Colors.Warning
-        return $false
-    }
-    
-    return $false
-}
+
 
 # 函数：测试WMI连接（使用CIM会话优化）
 function Test-WMIConnection {
@@ -617,127 +574,7 @@ function Get-LocalSystemInfo {
     }
 }
 
-# 函数：获取远程系统信息（WinRM方式）
-function Get-RemoteSystemInfoWinRM {
-    param(
-        [string]$ComputerName,
-        [System.Management.Automation.PSCredential]$Credential
-    )
-    
-    Write-ColorMessage "正在通过WinRM获取远程系统信息..." $Colors.Info
-    
-    $scriptBlock = {
-        $result = @{}
-        
-        $result.ComputerName = $env:COMPUTERNAME
-        $result.CurrentUser = "$env:USERDOMAIN\$env:USERNAME"
-        
-        $result.NetworkAdapters = @()
-    $networkAdapters = Get-NetAdapter | Where-Object { 
-        $_.Status -eq "Up" -and 
-        $_.Name -notlike "*Loopback*" -and
-        $_.Name -notlike "*Teredo*" -and
-            $_.Name -notlike "*isatap*" -and
-            $_.Name -notlike "*Bluetooth*"
-    }
-    
-    foreach ($adapter in $networkAdapters) {
-        $ipConfig = Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
-                   Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.IPAddress -ne "0.0.0.0" }
-        
-        if ($ipConfig) {
-                # 获取DNS服务器信息
-                $dnsServers = @()
-                try {
-                    $dnsConfig = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-                    if ($dnsConfig -and $dnsConfig.ServerAddresses) {
-                        $dnsServers = $dnsConfig.ServerAddresses | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
-                    }
-                }
-                catch {
-                    # 忽略DNS查询错误
-                }
-                
-                $result.NetworkAdapters += @{
-                    Name = $adapter.Name
-                    IPAddress = $ipConfig.IPAddress
-                    MACAddress = $adapter.MacAddress
-                    DNSServers = $dnsServers
-                    Type = if ($adapter.Virtual) { "虚拟网卡" } else { "物理网卡" }
-                }
-            }
-        }
-        
-        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
-        $computerInfo = Get-CimInstance -ClassName Win32_ComputerSystem
-        
-        $result.OSName = $osInfo.Caption
-        $result.OSVersion = $osInfo.Version
-        $result.OSArchitecture = $osInfo.OSArchitecture
-        $result.Manufacturer = $computerInfo.Manufacturer
-        $result.Model = $computerInfo.Model
-        $result.TotalMemoryGB = [math]::Round($computerInfo.TotalPhysicalMemory / 1GB, 2)
-        
-        # 获取Administrators组成员
-        try {
-            $adminMembers = @()
-            $group = [ADSI]"WinNT://./Administrators,group"
-            foreach ($member in $group.Members()) {
-                try {
-                    $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
-                    $memberPath = $member.GetType().InvokeMember("ADsPath", 'GetProperty', $null, $member, $null)
-                    $memberType = $member.GetType().InvokeMember("Class", 'GetProperty', $null, $member, $null)
-                    
-                    # 解析成员来源
-                    $principalSource = "Unknown"
-                    if ($memberPath -like "*WinNT://*/") {
-                        if ($memberPath -like "*WinNT://$env:COMPUTERNAME/*") {
-                            $principalSource = "Local"
-                        } else {
-                            $match = [regex]::Match($memberPath, 'WinNT://([^/]+)/')
-                            if ($match.Success) {
-                                $sourceName = $match.Groups[1].Value
-                                if ($sourceName -ne $env:COMPUTERNAME) {
-                                    $principalSource = "Domain ($sourceName)"
-                                } else {
-                                    $principalSource = "Local"
-                                }
-                            }
-                        }
-                    }
-                    
-                    $adminMembers += @{
-                        Name = $memberName
-                        Type = $memberType
-                        Source = $principalSource
-                        Path = $memberPath
-                    }
-                }
-                catch {
-                    # 忽略解析错误
-                }
-            }
-            $result.AdminMembers = $adminMembers
-        }
-        catch {
-            $result.AdminMembers = @()
-        }
-        
-        return $result
-    }
-    
-    $params = @{
-        ComputerName = $ComputerName
-        ScriptBlock = $scriptBlock
-        ErrorAction = 'Stop'
-    }
-    
-    if ($Credential) {
-        $params['Credential'] = $Credential
-    }
-    
-    return Invoke-Command @params
-}
+
 
 # 函数：获取远程系统信息（WMI方式）
 function Get-RemoteSystemInfoWMI {
@@ -1291,38 +1128,17 @@ try {
             throw "无法连接到远程计算机: $ComputerName"
         }
         
-        # 测试连接方式
-        $winrmAvailable = $false
-        $wmiAvailable = $false
+        # 测试WMI连接
+        Write-ColorMessage "正在测试WMI连接..." $Colors.Info
+        $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
         
-        if ($UseWinRM) {
-            Write-ColorMessage "用户指定使用WinRM，正在测试WinRM连接..." $Colors.Info
-            $winrmAvailable = Test-WinRMConnection -ComputerName $ComputerName -Credential $Credential
-            
-            if (-not $winrmAvailable) {
-                Write-ColorMessage "WinRM连接失败，尝试WMI连接..." $Colors.Warning
-                $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
-            }
-        } else {
-            Write-ColorMessage "默认使用WMI连接（更快速），如需使用WinRM请添加 -UseWinRM 参数" $Colors.Info
-            $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
-        }
-        
-        # 选择连接方式并获取信息
-        if ($winrmAvailable) {
-            $ConnectionMethod = "WinRM"
-            Write-ColorMessage "✓ 使用WinRM连接方式" $Colors.Success
-            $SystemInfo = Get-RemoteSystemInfoWinRM -ComputerName $ComputerName -Credential $Credential
-        } elseif ($wmiAvailable) {
+        # 获取远程系统信息
+        if ($wmiAvailable) {
             $ConnectionMethod = "WMI"
             Write-ColorMessage "✓ 使用WMI连接方式" $Colors.Success
             $SystemInfo = Get-RemoteSystemInfoWMI -ComputerName $ComputerName -Credential $Credential
         } else {
-            if ($UseWinRM) {
-                throw "无法通过WinRM或WMI连接到远程计算机: $ComputerName"
-            } else {
-                throw "无法通过WMI连接到远程计算机: $ComputerName。如需尝试WinRM连接，请使用 -UseWinRM 参数"
-            }
+            throw "无法通过WMI连接到远程计算机: $ComputerName"
         }
     } else {
         Write-ColorMessage "开始本地系统信息查询..." $Colors.Header
@@ -1376,10 +1192,9 @@ catch {
     Write-ColorMessage "操作失败，可能的原因：" $Colors.Warning
     if ($IsRemoteQuery) {
         Write-ColorMessage "1. 远程计算机不可达或网络连接问题" $Colors.Info
-        Write-ColorMessage "2. WinRM服务未启用或配置不正确" $Colors.Info
-        Write-ColorMessage "3. WMI服务被禁用或防火墙阻止" $Colors.Info
-        Write-ColorMessage "4. 用户权限不足或凭据无效" $Colors.Info
-        Write-ColorMessage "5. 目标计算机的安全策略限制" $Colors.Info
+        Write-ColorMessage "2. WMI服务被禁用或防火墙阻止" $Colors.Info
+        Write-ColorMessage "3. 用户权限不足或凭据无效" $Colors.Info
+        Write-ColorMessage "4. 目标计算机的安全策略限制" $Colors.Info
     } else {
         Write-ColorMessage "1. 系统服务异常或权限不足" $Colors.Info
         Write-ColorMessage "2. PowerShell版本不兼容" $Colors.Info
