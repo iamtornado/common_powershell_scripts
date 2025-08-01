@@ -26,6 +26,9 @@
 .PARAMETER Timeout
     远程连接超时时间（秒），默认为30秒
 
+.PARAMETER UseWinRM
+    强制尝试使用WinRM连接。默认情况下直接使用WMI连接以提高速度。
+
 .EXAMPLE
     .\Get-SystemInfo.ps1
     查询本地计算机信息
@@ -41,6 +44,10 @@
 .EXAMPLE
     .\Get-SystemInfo.ps1 -ComputerName "SERVER01" -SaveToFile -OutputPath "Server01_Info.txt"
     查询远程计算机并保存到指定文件
+
+.EXAMPLE
+    .\Get-SystemInfo.ps1 -ComputerName "SERVER01" -UseWinRM
+    强制使用WinRM连接查询远程计算机（默认使用更快的WMI连接）
 
 .NOTES
     作者: tornadoami
@@ -72,7 +79,10 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateRange(5, 300)]
-    [int]$Timeout = 30
+    [int]$Timeout = 30,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$UseWinRM
 )
 
 # 设置错误处理
@@ -928,10 +938,19 @@ try {
         }
         
         # 测试连接方式
-        $winrmAvailable = Test-WinRMConnection -ComputerName $ComputerName -Credential $Credential
+        $winrmAvailable = $false
         $wmiAvailable = $false
         
-        if (-not $winrmAvailable) {
+        if ($UseWinRM) {
+            Write-ColorMessage "用户指定使用WinRM，正在测试WinRM连接..." $Colors.Info
+            $winrmAvailable = Test-WinRMConnection -ComputerName $ComputerName -Credential $Credential
+            
+            if (-not $winrmAvailable) {
+                Write-ColorMessage "WinRM连接失败，尝试WMI连接..." $Colors.Warning
+                $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
+            }
+        } else {
+            Write-ColorMessage "默认使用WMI连接（更快速），如需使用WinRM请添加 -UseWinRM 参数" $Colors.Info
             $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
         }
         
@@ -945,7 +964,11 @@ try {
             Write-ColorMessage "✓ 使用WMI连接方式" $Colors.Success
             $SystemInfo = Get-RemoteSystemInfoWMI -ComputerName $ComputerName -Credential $Credential
         } else {
-            throw "无法通过WinRM或WMI连接到远程计算机: $ComputerName"
+            if ($UseWinRM) {
+                throw "无法通过WinRM或WMI连接到远程计算机: $ComputerName"
+            } else {
+                throw "无法通过WMI连接到远程计算机: $ComputerName。如需尝试WinRM连接，请使用 -UseWinRM 参数"
+            }
         }
     } else {
         Write-ColorMessage "开始本地系统信息查询..." $Colors.Header
@@ -953,30 +976,30 @@ try {
     }
     
     # 显示系统信息
-    Write-Host ""
+Write-Host ""
     $outputContent = Show-SystemInfo -SystemInfo $SystemInfo -IsRemote $IsRemoteQuery -ConnectionMethod $ConnectionMethod
 
     # 复制到剪切板
-    try {
-        $outputContent += ""
-        $outputContent += "========================================"
-        $outputContent += "以上信息已自动复制到剪切板"
+try {
+    $outputContent += ""
+    $outputContent += "========================================"
+    $outputContent += "以上信息已自动复制到剪切板"
         if ($IsRemoteQuery) {
             $outputContent += "远程计算机: $ComputerName"
             $outputContent += "连接方式: $ConnectionMethod"
         }
-        $outputContent += "请直接粘贴发送给IT工程师"
-        $outputContent += "========================================"
-        
-        $clipboardContent = $outputContent -join "`r`n"
-        $clipboardContent | Set-Clipboard
-        
+    $outputContent += "请直接粘贴发送给IT工程师"
+    $outputContent += "========================================"
+    
+    $clipboardContent = $outputContent -join "`r`n"
+    $clipboardContent | Set-Clipboard
+    
         $clipboardSuccess = $true
-    }
-    catch {
+}
+catch {
         $clipboardSuccess = $false
         $clipboardError = $_.Exception.Message
-    }
+}
 
     # 保存到文件
 if ($SaveToFile) {
@@ -1049,7 +1072,7 @@ finally {
     Write-Host ""
     Write-ColorMessage "脚本执行完成！" $Colors.Header
     Write-ColorMessage "执行时间: $($ExecutionTime.TotalSeconds.ToString('F2')) 秒" $Colors.Info
-    Write-Host ""
+Write-Host ""
     
     Write-ColorMessage "使用提示：" $Colors.Warning
     if ($IsRemoteQuery) {
@@ -1065,7 +1088,7 @@ finally {
     Write-ColorMessage "5. 按任意键退出..." $Colors.Info
     
     try {
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
     catch {
         Start-Sleep -Seconds 2
