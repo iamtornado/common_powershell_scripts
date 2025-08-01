@@ -55,7 +55,7 @@
 
 .NOTES
     作者: tornadoami
-    版本: 3.0
+    版本: 3.1
     创建日期: 2025-08-01
     要求: PowerShell 5.1+, Windows 7+
     
@@ -238,74 +238,7 @@ function Test-NetworkConnectivity {
 
 
 
-# 函数：测试WMI连接（使用CIM会话优化）
-function Test-WMIConnection {
-    param(
-        [string]$ComputerName,
-        [System.Management.Automation.PSCredential]$Credential
-    )
-    
-    Write-ColorMessage "正在测试WMI连接..." $Colors.Info
-    Write-DebugMessage "开始WMI连接测试目标: $ComputerName" "WMI"
-    
-    try {
-        $startTime = Get-Date
-        
-        # 创建CIM会话选项（使用DCOM协议）
-        Write-DebugMessage "创建CIM会话选项 (DCOM协议)" "WMI"
-        $sessionOption = New-CimSessionOption -Protocol Dcom
-        
-        # 创建CIM会话参数
-        $sessionParams = @{
-            ComputerName = $ComputerName
-            SessionOption = $sessionOption
-            ErrorAction = 'Stop'
-        }
-        
-        if ($Credential) {
-            $sessionParams['Credential'] = $Credential
-            Write-DebugMessage "使用提供的凭据" "WMI"
-        } else {
-            Write-DebugMessage "使用当前用户凭据" "WMI"
-        }
-        
-        # 创建临时CIM会话进行测试
-        Write-DebugMessage "创建临时CIM会话..." "WMI"
-        $testSession = New-CimSession @sessionParams
-        $sessionTime = Get-Date
-        $sessionDuration = ($sessionTime - $startTime).TotalMilliseconds
-        Write-DebugMessage "CIM会话创建耗时: $($sessionDuration.ToString('F2'))ms" "WMI"
-        
-        Write-DebugMessage "执行测试查询 Win32_ComputerSystem..." "WMI"
-        $result = Get-CimInstance -CimSession $testSession -ClassName Win32_ComputerSystem | Select-Object -First 1
-        $queryTime = Get-Date
-        Write-DebugMessage "测试查询耗时: $(($queryTime - $sessionTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
-        
-        # 清理测试会话
-        Remove-CimSession -CimSession $testSession
-        $endTime = Get-Date
-        Write-DebugMessage "WMI连接测试总耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
-        
-        if ($result) {
-            Write-ColorMessage "✓ WMI连接测试成功" $Colors.Success
-            Write-DebugMessage "WMI连接测试成功，获取到计算机信息: $($result.Name)" "WMI"
-            return $true
-        }
-    }
-    catch {
-        $endTime = Get-Date
-        Write-ColorMessage "✗ WMI连接测试失败: $($_.Exception.Message)" $Colors.Warning
-        Write-DebugMessage "WMI连接测试失败耗时: $(($endTime - $startTime).TotalMilliseconds.ToString('F2'))ms" "WMI"
-        Write-DebugMessage "WMI连接异常详情: $($_.Exception.Message)" "ERROR"
-        # 确保清理会话
-        if ($testSession) {
-            Remove-CimSession -CimSession $testSession -ErrorAction SilentlyContinue
-        }
-        return $false
-    }
-    
-    return $false
-}
+
 
 # 函数：获取本地Administrators组成员
 function Get-LocalAdminMembers {
@@ -583,6 +516,7 @@ function Get-RemoteSystemInfoWMI {
         [System.Management.Automation.PSCredential]$Credential
     )
     
+    Write-ColorMessage "正在测试WMI连接..." $Colors.Info
     Write-ColorMessage "正在通过WMI获取远程系统信息..." $Colors.Info
     
     $info = @{}
@@ -606,6 +540,7 @@ function Get-RemoteSystemInfoWMI {
         
         # 创建CIM会话
         $cimSession = New-CimSession @sessionParams
+        Write-ColorMessage "✓ WMI连接测试成功" $Colors.Success
         Write-ColorMessage "CIM连接建立成功" $Colors.Success
         
         # 获取计算机基本信息（使用CIM会话）
@@ -1128,18 +1063,10 @@ try {
             throw "无法连接到远程计算机: $ComputerName"
         }
         
-        # 测试WMI连接
-        Write-ColorMessage "正在测试WMI连接..." $Colors.Info
-        $wmiAvailable = Test-WMIConnection -ComputerName $ComputerName -Credential $Credential
-        
         # 获取远程系统信息
-        if ($wmiAvailable) {
-            $ConnectionMethod = "WMI"
-            Write-ColorMessage "✓ 使用WMI连接方式" $Colors.Success
-            $SystemInfo = Get-RemoteSystemInfoWMI -ComputerName $ComputerName -Credential $Credential
-        } else {
-            throw "无法通过WMI连接到远程计算机: $ComputerName"
-        }
+        $ConnectionMethod = "WMI"
+        Write-ColorMessage "✓ 使用WMI连接方式" $Colors.Success
+        $SystemInfo = Get-RemoteSystemInfoWMI -ComputerName $ComputerName -Credential $Credential
     } else {
         Write-ColorMessage "开始本地系统信息查询..." $Colors.Header
         $SystemInfo = Get-LocalSystemInfo
