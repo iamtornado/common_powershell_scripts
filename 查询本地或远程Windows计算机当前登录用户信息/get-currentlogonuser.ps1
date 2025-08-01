@@ -1,26 +1,40 @@
-﻿$computerName = "win11-24h2-pxe" #或者$computerName = "192.168.124.15"
-$users = @()
+﻿param (
+    [string]$ComputerName = "10.64.9.127"
+)
 
-$logonSessions = Get-WmiObject -Class Win32_LogonSession -ComputerName $computerName |
-    Where-Object { $_.LogonType -eq 2 -or $_.LogonType -eq 10 }
+$users = @()
+$logonIdMap = @{}
+$validLogonTypes = @(2, 10)
+
+# 获取交互式（2）和远程桌面（10）登录的会话
+$logonSessions = Get-WmiObject -Class Win32_LogonSession -ComputerName $ComputerName `
+    -Authentication PacketPrivacy |
+    Where-Object { $validLogonTypes -contains $_.LogonType }
 
 foreach ($session in $logonSessions) {
-    $logonId = $session.LogonId
+    $logonIdMap[$session.LogonId] = $true
+}
 
-    $assocs = Get-WmiObject -Class Win32_LoggedOnUser -ComputerName $computerName |
-        Where-Object { $_.Dependent -match "LogonId=`"$logonId`"" }
+# 预加载用户信息（User-LogonSession关联）
+$loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser -ComputerName $ComputerName `
+    -Authentication PacketPrivacy
 
-    foreach ($assoc in $assocs) {
-        try {
-            $userObj = [WMI]$assoc.Antecedent
-            $fullName = "$($userObj.Domain)\$($userObj.Name)"
+foreach ($assoc in $loggedOnUsers) {
+    # 提取 LogonId
+    if ($assoc.Dependent -match 'LogonId="(\d+)"') {
+        $logonId = $matches[1]
 
-            # 排除系统虚拟账户 + 去重
-            if ($fullName -notmatch '^DWM-|^UMFD-' -and $users -notcontains $fullName) {
-                $users += $fullName
+        if ($logonIdMap.ContainsKey($logonId)) {
+            try {
+                $userObj = [WMI]$assoc.Antecedent
+                $fullName = "$($userObj.Domain)\$($userObj.Name)"
+
+                if ($fullName -notmatch '^(DWM-|UMFD-)' -and $users -notcontains $fullName) {
+                    $users += $fullName
+                }
+            } catch {
+                Write-Warning "忽略解析失败用户：$($_.Exception.Message)"
             }
-        } catch {
-            # 忽略解析失败的对象（例如无效路径）
         }
     }
 }
