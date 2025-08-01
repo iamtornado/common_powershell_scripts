@@ -12,9 +12,10 @@ echo.
 echo 1. 基础信息查询 (推荐) - 快速获取核心信息
 echo 2. 详细信息查询 - 获取完整系统信息
 echo 3. 详细信息查询并保存到文件
-echo 4. 退出
+echo 4. 测试剪切板功能
+echo 5. 退出
 echo.
-set /p choice=请输入选择 (1-4): 
+set /p choice=请输入选择 (1-5): 
 
 if "%choice%"=="1" (
     echo.
@@ -40,6 +41,13 @@ if "%choice%"=="3" (
 )
 
 if "%choice%"=="4" (
+    echo.
+    echo 正在测试剪切板功能...
+    powershell.exe -ExecutionPolicy Bypass -File "Test-Clipboard.ps1"
+    goto end
+)
+
+if "%choice%"=="5" (
     echo 再见！
     goto end
 )

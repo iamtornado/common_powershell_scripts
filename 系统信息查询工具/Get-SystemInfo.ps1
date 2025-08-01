@@ -146,6 +146,26 @@ catch {
 Write-Host ""
 Write-Host "=================================" -ForegroundColor Cyan
 
+# 将所有信息复制到剪切板
+try {
+    $outputContent += ""
+    $outputContent += "========================================"
+    $outputContent += "以上信息已自动复制到剪切板"
+    $outputContent += "请直接粘贴发送给IT工程师"
+    $outputContent += "========================================"
+    
+    $clipboardContent = $outputContent -join "`r`n"
+    $clipboardContent | Set-Clipboard
+    
+    Write-Host ""
+    Write-Host "✅ 详细信息已自动复制到剪切板！" -ForegroundColor Green
+    Write-Host "请直接在IM软件中粘贴发送给IT工程师" -ForegroundColor Yellow
+}
+catch {
+    Write-Host "❌ 复制到剪切板失败: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "请手动复制以上信息" -ForegroundColor Yellow
+}
+
 # 保存到文件（如果指定了参数）
 if ($SaveToFile) {
     try {
@@ -160,7 +180,7 @@ if ($SaveToFile) {
 # 提示用户
 Write-Host ""
 Write-Host "提示：" -ForegroundColor Yellow
-Write-Host "1. 请将以上信息提供给IT运维工程师" -ForegroundColor White
+Write-Host "1. 信息已自动复制到剪切板，可直接粘贴发送" -ForegroundColor White
 Write-Host "2. 如需保存信息到文件，请运行: .\Get-SystemInfo.ps1 -SaveToFile" -ForegroundColor White
 Write-Host "3. 按任意键退出..." -ForegroundColor White
 

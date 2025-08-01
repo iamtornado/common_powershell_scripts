@@ -14,6 +14,14 @@ Write-Host "  基础系统信息查询" -ForegroundColor Yellow
 Write-Host "=============================" -ForegroundColor Cyan
 Write-Host ""
 
+# 初始化输出内容数组，用于收集所有信息
+$outputLines = @()
+$outputLines += "=============================="
+$outputLines += "  基础系统信息查询结果"
+$outputLines += "  查询时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+$outputLines += "=============================="
+$outputLines += ""
+
 try {
     # 获取计算机名（FQDN）
     $computerName = $env:COMPUTERNAME
@@ -32,16 +40,21 @@ try {
     }
     
     Write-Host "计算机名: $fqdn" -ForegroundColor Green
+    $outputLines += "计算机名: $fqdn"
     
     # 获取当前登录用户
     $currentUser = $env:USERNAME
     $userDomain = $env:USERDOMAIN
     $fullUserName = "$userDomain\$currentUser"
     Write-Host "当前用户: $fullUserName" -ForegroundColor Green
+    $outputLines += "当前用户: $fullUserName"
     
     Write-Host ""
     Write-Host "网络信息:" -ForegroundColor Yellow
     Write-Host "---------" -ForegroundColor Yellow
+    $outputLines += ""
+    $outputLines += "网络信息:"
+    $outputLines += "---------"
     
     # 获取活动网络适配器的IP和MAC地址
     $networkAdapters = Get-NetAdapter | Where-Object { 
@@ -67,20 +80,48 @@ try {
             Write-Host "IP地址: $ipAddress" -ForegroundColor Green
             Write-Host "MAC地址: $macAddress" -ForegroundColor Green
             Write-Host ""
+            
+            $outputLines += "网卡名称: $adapterName"
+            $outputLines += "IP地址: $ipAddress"
+            $outputLines += "MAC地址: $macAddress"
+            $outputLines += ""
         }
     }
     
     if (-not $foundActiveConnection) {
         Write-Host "未找到活动的网络连接" -ForegroundColor Red
+        $outputLines += "未找到活动的网络连接"
     }
     
 }
 catch {
-    Write-Host "获取信息时发生错误: $($_.Exception.Message)" -ForegroundColor Red
+    $errorMessage = "获取信息时发生错误: $($_.Exception.Message)"
+    Write-Host $errorMessage -ForegroundColor Red
+    $outputLines += $errorMessage
 }
 
-Write-Host "=============================" -ForegroundColor Cyan
-Write-Host "请将以上信息提供给IT工程师" -ForegroundColor Yellow
+# 将所有信息复制到剪切板
+try {
+    $outputLines += ""
+    $outputLines += "=============================="
+    $outputLines += "以上信息已自动复制到剪切板"
+    $outputLines += "请直接粘贴发送给IT工程师"
+    $outputLines += "=============================="
+    
+    $clipboardContent = $outputLines -join "`r`n"
+    $clipboardContent | Set-Clipboard
+    
+    Write-Host "=============================" -ForegroundColor Cyan
+    Write-Host "✅ 信息已自动复制到剪切板！" -ForegroundColor Green
+    Write-Host "请直接在IM软件中粘贴发送给IT工程师" -ForegroundColor Yellow
+    Write-Host "=============================" -ForegroundColor Cyan
+}
+catch {
+    Write-Host "❌ 复制到剪切板失败: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "请手动复制以上信息" -ForegroundColor Yellow
+}
+
+Write-Host ""
 Write-Host "按任意键退出..." -ForegroundColor White
 
 # 等待用户按键
