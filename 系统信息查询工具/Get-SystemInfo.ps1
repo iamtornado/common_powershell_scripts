@@ -291,9 +291,9 @@ function Get-RemoteAdminMembers {
     try {
         $adminMembers = @()
         
-        # 首先尝试使用ADSI方式（参考ADSI脚本）
+        # 使用高效的ADSI方式直接连接（参考高效脚本）
         try {
-            Write-ColorMessage "尝试通过ADSI获取管理员组成员..." $Colors.Info
+            Write-ColorMessage "使用ADSI直接连接到管理员组..." $Colors.Info
             $group = [ADSI]"WinNT://$ComputerName/Administrators,group"
             
             foreach ($member in $group.Members()) {
@@ -618,18 +618,30 @@ function Get-RemoteSystemInfoWMI {
     
     $info = @{}
     
-    $params = @{
-        ComputerName = $ComputerName
-        ErrorAction = 'Stop'
-    }
-    
-    if ($Credential) {
-        $params['Credential'] = $Credential
-    }
-    
-    # 获取计算机基本信息
-    $computerInfo = Get-WmiObject -Class Win32_ComputerSystem @params
-    $osInfo = Get-WmiObject -Class Win32_OperatingSystem @params
+    # 使用CIM会话提高性能
+    Write-ColorMessage "正在建立CIM连接..." $Colors.Info
+    try {
+        # 创建CIM会话选项（使用DCOM协议）
+        $sessionOption = New-CimSessionOption -Protocol Dcom
+        
+        # 创建CIM会话参数
+        $sessionParams = @{
+            ComputerName = $ComputerName
+            SessionOption = $sessionOption
+            ErrorAction = 'Stop'
+        }
+        
+        if ($Credential) {
+            $sessionParams['Credential'] = $Credential
+        }
+        
+        # 创建CIM会话
+        $cimSession = New-CimSession @sessionParams
+        Write-ColorMessage "CIM连接建立成功" $Colors.Success
+        
+        # 获取计算机基本信息（使用CIM会话）
+        $computerInfo = Get-CimInstance -CimSession $cimSession -ClassName Win32_ComputerSystem
+        $osInfo = Get-CimInstance -CimSession $cimSession -ClassName Win32_OperatingSystem
     
     # 获取完整的计算机名（FQDN）
     try {
@@ -676,73 +688,58 @@ function Get-RemoteSystemInfoWMI {
             Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
             $currentUsers = @()
         
-        # 方法1：获取所有登录会话（只查询真正的交互式会话以提高性能）
-        Write-ColorMessage "正在查询登录会话..." $Colors.Info
+        # 使用超高效的用户查询方法（参考高效脚本）
+        Write-ColorMessage "正在查询登录用户（高效方法）..." $Colors.Info
         try {
-            # 只查询交互式和远程交互式会话，排除缓存交互式以提高性能
-            $logonSessions = Get-WmiObject -Class Win32_LogonSession @params | 
-                Where-Object { 
-                    $_.LogonType -eq 2 -or     # 交互式
-                    $_.LogonType -eq 10        # 远程交互式
-                } | Select-Object -First 3    # 限制最多3个会话以提高性能
-        }
-        catch {
-            Write-ColorMessage "登录会话查询失败，尝试快速方法..." $Colors.Warning
-            $logonSessions = @()
-        }
-        
-        Write-ColorMessage "找到 $($logonSessions.Count) 个登录会话" $Colors.Info
-        
-        foreach ($session in $logonSessions) {
-            $logonId = $session.LogonId
+            $users = @()
+            $logonIdMap = @{}
+            $validLogonTypes = @(2, 10)  # 交互式和远程交互式
             
-            # 直接查询用户，限制结果数量
-            try {
-                $loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser @params | 
-                    Where-Object { $_.Dependent -match "LogonId=`"$logonId`"" } |
-                    Select-Object -First 1  # 每个会话只取第一个用户以提高性能
-            }
-            catch {
-                continue  # 跳过这个会话
+            # 获取交互式和远程桌面登录会话，使用PacketPrivacy认证
+            $logonSessions = Get-WmiObject -Class Win32_LogonSession -ComputerName $ComputerName `
+                -Authentication PacketPrivacy | 
+                Where-Object { $validLogonTypes -contains $_.LogonType }
+            
+            Write-ColorMessage "找到 $($logonSessions.Count) 个相关登录会话" $Colors.Info
+            
+            # 创建LogonId哈希表以提高查找性能
+            foreach ($session in $logonSessions) {
+                $logonIdMap[$session.LogonId] = $true
             }
             
-            foreach ($user in $loggedOnUsers) {
-                try {
-                    # 解析用户信息 - 支持多种格式
-                    if ($user.Antecedent -match 'Win32_UserAccount\.Domain="([^"]+)",Name="([^"]+)"') {
-                        $userDomain = $matches[1]
-                        $userName = $matches[2]
-                        $fullName = "$userDomain\$userName"
-                        
-                        # 过滤系统账户
-                        if ($userName -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|IUSR_|IWAM_|DefaultAccount|Guest|Administrator\$)' -and 
-                            $currentUsers -notcontains $fullName) {
-                            $currentUsers += $fullName
-                        }
-                    } elseif ($user.Antecedent -match 'Win32_Group\.Domain="([^"]+)",Name="([^"]+)"') {
-                        $userDomain = $matches[1]
-                        $userName = $matches[2]
-                        $fullName = "$userDomain\$userName"
-                        
-                        if ($userName -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|IUSR_|IWAM_|DefaultAccount|Guest|Administrator\$)' -and 
-                            $currentUsers -notcontains $fullName) {
-                            $currentUsers += $fullName
-                        }
-                    } elseif ($user.Antecedent -match 'Win32_Account\.Domain="([^"]+)",Name="([^"]+)"') {
-                        $userDomain = $matches[1]
-                        $userName = $matches[2]
-                        $fullName = "$userDomain\$userName"
-                        
-                        if ($userName -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|IUSR_|IWAM_|DefaultAccount|Guest|Administrator\$)' -and 
-                            $currentUsers -notcontains $fullName) {
-                            $currentUsers += $fullName
+            # 预加载用户信息（User-LogonSession关联）
+            $loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser -ComputerName $ComputerName `
+                -Authentication PacketPrivacy
+            
+            foreach ($assoc in $loggedOnUsers) {
+                # 使用正则表达式直接提取LogonId，提高性能
+                if ($assoc.Dependent -match 'LogonId="(\d+)"') {
+                    $logonId = $matches[1]
+                    
+                    # 使用哈希表快速检查LogonId是否有效
+                    if ($logonIdMap.ContainsKey($logonId)) {
+                        try {
+                            $userObj = [WMI]$assoc.Antecedent
+                            $fullName = "$($userObj.Domain)\$($userObj.Name)"
+                            
+                            # 排除系统虚拟账户和重复用户
+                            if ($fullName -notmatch '^(DWM-|UMFD-)' -and $users -notcontains $fullName) {
+                                $users += $fullName
+                            }
+                        } catch {
+                            # 忽略解析失败的用户
                         }
                     }
                 }
-                catch {
-                    # 忽略解析错误
-                }
             }
+            
+            if ($users.Count -gt 0) {
+                $currentUsers = $users
+            }
+        }
+        catch {
+            Write-ColorMessage "高效用户查询方法失败，使用备用方法: $($_.Exception.Message)" $Colors.Warning
+            $currentUsers = @()
         }
         
         # 方法2：如果上面没找到用户，尝试直接查询Win32_ComputerSystem的UserName属性
@@ -797,36 +794,29 @@ function Get-RemoteSystemInfoWMI {
         }
     }
     
-    # 获取网络适配器信息（高度优化查询性能）
+    # 获取网络适配器信息（使用CIM会话优化性能）
     $info.NetworkAdapters = @()
     
     Write-ColorMessage "正在获取网络适配器信息..." $Colors.Info
     try {
-        # 一次性获取所有数据，避免重复查询
-        $allAdapterConfigs = Get-WmiObject -Class Win32_NetworkAdapterConfiguration @params | Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -and $_.MACAddress }
-        $allAdapters = Get-WmiObject -Class Win32_NetworkAdapter @params
+        # 使用CIM会话一次性获取所有网络配置信息
+        $networkConfigs = Get-CimInstance -CimSession $cimSession -ClassName Win32_NetworkAdapterConfiguration | 
+            Where-Object { $_.IPEnabled -eq $true -and $_.IPAddress -and $_.MACAddress }
         
-        # 创建索引映射以提高查找性能
-        $adapterLookup = @{}
-        foreach ($adapter in $allAdapters) {
-            $adapterLookup[$adapter.Index] = $adapter
-        }
-        
-        foreach ($adapterConfig in $allAdapterConfigs) {
-            $adapter = $adapterLookup[$adapterConfig.Index]
-            if ($adapter) {
+        foreach ($config in $networkConfigs) {
+            if ($config.IPAddress) {
                 # 获取DNS服务器信息
                 $dnsServers = @()
-                if ($adapterConfig.DNSServerSearchOrder) {
-                    $dnsServers = $adapterConfig.DNSServerSearchOrder | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
+                if ($config.DNSServerSearchOrder) {
+                    $dnsServers = $config.DNSServerSearchOrder | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne "::1" }
                 }
                 
                 $info.NetworkAdapters += @{
-                    Name = if ($adapter.NetConnectionID) { $adapter.NetConnectionID } else { $adapter.Name }
-                    IPAddress = $adapterConfig.IPAddress[0]
-                    MACAddress = $adapterConfig.MACAddress
+                    Name = if ($config.Description) { $config.Description } else { "Unknown Adapter" }
+                    IPAddress = $config.IPAddress[0]
+                    MACAddress = $config.MACAddress
                     DNSServers = $dnsServers
-                    Type = if ($adapter.Name -like "*Virtual*" -or $adapter.Name -like "*VMware*" -or $adapter.Name -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
+                    Type = if ($config.Description -like "*Virtual*" -or $config.Description -like "*VMware*" -or $config.Description -like "*Hyper-V*") { "虚拟网卡" } else { "物理网卡" }
                 }
             }
         }
@@ -853,7 +843,21 @@ function Get-RemoteSystemInfoWMI {
         $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential
     }
     
+    # 清理CIM会话
+    if ($cimSession) {
+        Remove-CimSession -CimSession $cimSession
+        Write-ColorMessage "CIM会话已清理" $Colors.Info
+    }
+    
     return $info
+    }
+    catch {
+        # 确保在异常情况下也清理CIM会话
+        if ($cimSession) {
+            Remove-CimSession -CimSession $cimSession -ErrorAction SilentlyContinue
+        }
+        throw
+    }
 }
 
 # 函数：显示系统信息
