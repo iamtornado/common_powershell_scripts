@@ -58,7 +58,7 @@
 
 .NOTES
     作者: tornadoami
-    版本: 2.2
+    版本: 2.3
     创建日期: 2025-08-01
     要求: PowerShell 5.1+, Windows 7+
     
@@ -184,7 +184,7 @@ function Test-WinRMConnection {
     return $false
 }
 
-# 函数：测试WMI连接
+# 函数：测试WMI连接（使用CIM会话优化）
 function Test-WMIConnection {
     param(
         [string]$ComputerName,
@@ -194,17 +194,26 @@ function Test-WMIConnection {
     Write-ColorMessage "正在测试WMI连接..." $Colors.Info
     
     try {
-        $params = @{
-            Class = 'Win32_ComputerSystem'
+        # 创建CIM会话选项（使用DCOM协议）
+        $sessionOption = New-CimSessionOption -Protocol Dcom
+        
+        # 创建CIM会话参数
+        $sessionParams = @{
             ComputerName = $ComputerName
+            SessionOption = $sessionOption
             ErrorAction = 'Stop'
         }
         
         if ($Credential) {
-            $params['Credential'] = $Credential
+            $sessionParams['Credential'] = $Credential
         }
         
-        $result = Get-WmiObject @params | Select-Object -First 1
+        # 创建临时CIM会话进行测试
+        $testSession = New-CimSession @sessionParams
+        $result = Get-CimInstance -CimSession $testSession -ClassName Win32_ComputerSystem | Select-Object -First 1
+        
+        # 清理测试会话
+        Remove-CimSession -CimSession $testSession
         
         if ($result) {
             Write-ColorMessage "✓ WMI连接测试成功" $Colors.Success
@@ -213,6 +222,10 @@ function Test-WMIConnection {
     }
     catch {
         Write-ColorMessage "✗ WMI连接测试失败: $($_.Exception.Message)" $Colors.Warning
+        # 确保清理会话
+        if ($testSession) {
+            Remove-CimSession -CimSession $testSession -ErrorAction SilentlyContinue
+        }
         return $false
     }
     
@@ -285,7 +298,8 @@ function Get-LocalAdminMembers {
 function Get-RemoteAdminMembers {
     param(
         [string]$ComputerName,
-        [System.Management.Automation.PSCredential]$Credential
+        [System.Management.Automation.PSCredential]$Credential,
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
     
     try {
@@ -350,29 +364,28 @@ function Get-RemoteAdminMembers {
         catch {
             Write-ColorMessage "ADSI方式获取失败，尝试WMI方式..." $Colors.Warning
             
-            # 如果ADSI失败，尝试使用WMI方式
-            $params = @{
-                ComputerName = $ComputerName
-                ErrorAction = 'Stop'
+            # 如果ADSI失败，尝试使用CIM会话方式（性能更优）
+            Write-ColorMessage "ADSI方式失败，尝试CIM会话备用方法..." $Colors.Warning
+            
+            # 使用已建立的CIM会话获取计算机名
+            $computerSystemInfo = Get-CimInstance -CimSession $cimSession -ClassName Win32_ComputerSystem
+            $computerName = $computerSystemInfo.Name
+            
+            # 使用CIM会话和关联查询获取Administrators组成员
+            $adminGroup = Get-CimInstance -CimSession $cimSession -ClassName Win32_Group | 
+                Where-Object { $_.Name -eq "Administrators" -and $_.Domain -eq $computerName }
+            
+            if ($adminGroup) {
+                $wmiMembers = Get-CimAssociatedInstance -CimSession $cimSession -InputObject $adminGroup -ResultClassName Win32_UserAccount, Win32_Group
+            } else {
+                $wmiMembers = @()
             }
-            
-            if ($Credential) {
-                $params['Credential'] = $Credential
-            }
-            
-            # 获取计算机名用于构建查询
-            $computerInfo = Get-WmiObject -Class Win32_ComputerSystem @params
-            $computerName = $computerInfo.Name
-            
-            # 使用WMI查询Administrators组成员
-            $adminMembersQuery = "ASSOCIATORS OF {Win32_Group.Domain='$computerName',Name='Administrators'} WHERE AssocClass=Win32_GroupUser Role=GroupComponent"
-            $wmiMembers = Get-WmiObject -Query $adminMembersQuery @params
             
             foreach ($member in $wmiMembers) {
                 try {
                     $memberDomain = $member.Domain
                     $memberName = $member.Name
-                    $memberType = if ($member.__CLASS -eq "Win32_UserAccount") { "User" } else { "Group" }
+                    $memberType = if ($member.CimClass.CimClassName -eq "Win32_UserAccount") { "User" } else { "Group" }
                     
                     # 判断是本地还是域成员
                     $principalSource = if ($memberDomain -eq $computerName) { "Local" } else { "Domain ($memberDomain)" }
@@ -381,7 +394,7 @@ function Get-RemoteAdminMembers {
                         Name = $memberName
                         Type = $memberType
                         Source = $principalSource
-                        Path = "WMI: $memberDomain\$memberName"
+                        Path = "CIM: $memberDomain\$memberName"
                     }
                 }
                 catch {
@@ -688,16 +701,15 @@ function Get-RemoteSystemInfoWMI {
             Write-ColorMessage "正在获取当前登录用户..." $Colors.Info
             $currentUsers = @()
         
-        # 使用超高效的用户查询方法（参考高效脚本）
-        Write-ColorMessage "正在查询登录用户（高效方法）..." $Colors.Info
+        # 使用CIM会话的超高效用户查询方法
+        Write-ColorMessage "正在查询登录用户（CIM优化方法）..." $Colors.Info
         try {
             $users = @()
             $logonIdMap = @{}
             $validLogonTypes = @(2, 10)  # 交互式和远程交互式
             
-            # 获取交互式和远程桌面登录会话，使用PacketPrivacy认证
-            $logonSessions = Get-WmiObject -Class Win32_LogonSession -ComputerName $ComputerName `
-                -Authentication PacketPrivacy | 
+            # 使用CIM会话获取登录会话，性能更优
+            $logonSessions = Get-CimInstance -CimSession $cimSession -ClassName Win32_LogonSession | 
                 Where-Object { $validLogonTypes -contains $_.LogonType }
             
             Write-ColorMessage "找到 $($logonSessions.Count) 个相关登录会话" $Colors.Info
@@ -707,9 +719,8 @@ function Get-RemoteSystemInfoWMI {
                 $logonIdMap[$session.LogonId] = $true
             }
             
-            # 预加载用户信息（User-LogonSession关联）
-            $loggedOnUsers = Get-WmiObject -Class Win32_LoggedOnUser -ComputerName $ComputerName `
-                -Authentication PacketPrivacy
+            # 使用CIM会话预加载用户信息（User-LogonSession关联）
+            $loggedOnUsers = Get-CimInstance -CimSession $cimSession -ClassName Win32_LoggedOnUser
             
             foreach ($assoc in $loggedOnUsers) {
                 # 使用正则表达式直接提取LogonId，提高性能
@@ -719,12 +730,16 @@ function Get-RemoteSystemInfoWMI {
                     # 使用哈希表快速检查LogonId是否有效
                     if ($logonIdMap.ContainsKey($logonId)) {
                         try {
-                            $userObj = [WMI]$assoc.Antecedent
-                            $fullName = "$($userObj.Domain)\$($userObj.Name)"
-                            
-                            # 排除系统虚拟账户和重复用户
-                            if ($fullName -notmatch '^(DWM-|UMFD-)' -and $users -notcontains $fullName) {
-                                $users += $fullName
+                            # 解析用户信息，支持多种格式
+                            if ($assoc.Antecedent -match 'Win32_UserAccount\.Domain="([^"]+)",Name="([^"]+)"') {
+                                $userDomain = $matches[1]
+                                $userName = $matches[2]
+                                $fullName = "$userDomain\$userName"
+                                
+                                # 排除系统虚拟账户和重复用户
+                                if ($fullName -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE)' -and $users -notcontains $fullName) {
+                                    $users += $fullName
+                                }
                             }
                         } catch {
                             # 忽略解析失败的用户
@@ -738,7 +753,7 @@ function Get-RemoteSystemInfoWMI {
             }
         }
         catch {
-            Write-ColorMessage "高效用户查询方法失败，使用备用方法: $($_.Exception.Message)" $Colors.Warning
+            Write-ColorMessage "CIM用户查询方法失败，使用备用方法: $($_.Exception.Message)" $Colors.Warning
             $currentUsers = @()
         }
         
@@ -755,16 +770,19 @@ function Get-RemoteSystemInfoWMI {
             }
         }
         
-        # 方法3：如果还是没找到，尝试查询所有活动进程的所有者
+        # 方法3：如果还是没找到，使用CIM会话查询进程所有者
         if ($currentUsers.Count -eq 0) {
-            Write-ColorMessage "尝试通过进程所有者获取用户信息..." $Colors.Info
+            Write-ColorMessage "尝试通过进程所有者获取用户信息（CIM优化）..." $Colors.Info
             try {
-                $processes = Get-WmiObject -Class Win32_Process @params | 
-                    Where-Object { $_.Name -eq "explorer.exe" -or $_.Name -eq "dwm.exe" }
+                # 使用CIM会话查询关键进程
+                $processes = Get-CimInstance -CimSession $cimSession -ClassName Win32_Process | 
+                    Where-Object { $_.Name -eq "explorer.exe" -or $_.Name -eq "dwm.exe" } |
+                    Select-Object -First 5  # 限制查询数量提高性能
                 
                 foreach ($process in $processes) {
                     try {
-                        $owner = $process.GetOwner()
+                        # 使用CIM方法调用获取进程所有者
+                        $owner = Invoke-CimMethod -CimSession $cimSession -InputObject $process -MethodName GetOwner
                         if ($owner.Domain -and $owner.User) {
                             $fullName = "$($owner.Domain)\$($owner.User)"
                             if ($owner.User -notmatch '^(DWM-|UMFD-|SYSTEM|LOCAL SERVICE|NETWORK SERVICE|IUSR_|IWAM_|DefaultAccount|Guest|Administrator\$)' -and 
@@ -840,7 +858,7 @@ function Get-RemoteSystemInfoWMI {
         $info.AdminMembers = @()
     } else {
         Write-ColorMessage "正在获取Administrators组成员..." $Colors.Info
-        $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential
+        $info.AdminMembers = Get-RemoteAdminMembers -ComputerName $ComputerName -Credential $Credential -CimSession $cimSession
     }
     
     # 清理CIM会话
