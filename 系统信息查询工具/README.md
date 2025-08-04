@@ -1,11 +1,11 @@
 # 系统信息查询工具 📊
 
 > **System Information Query Tool**  
-> 支持本地和远程Windows计算机系统信息查询的PowerShell工具
+> 支持本地和远程Windows计算机系统信息查询的powershell脚本（含独立可执行工具，exe）
 
 ## 📋 功能概述
 
-这是一个专为IT运维和技术支持设计的PowerShell脚本，能够快速收集本地或远程Windows计算机的关键系统信息，并自动复制到剪切板，方便用户直接发送给IT工程师进行故障诊断和技术支持。
+这是一个专为IT运维和技术支持设计的powershell脚本（含独立可执行工具，exe），能够快速收集本地或远程Windows计算机的关键系统信息，并自动复制到剪切板，方便用户直接发送给IT工程师进行故障诊断和技术支持。
 
 ### ✨ 主要特性
 
@@ -24,6 +24,7 @@
 - 👥 **用户会话管理**：智能识别当前登录用户，区分本地和域用户
 - 🏠 **管理员组分类**：清晰区分本地管理员组成员和域管理员组成员
 - 📊 **性能优化**：使用高效的CIM查询，支持批量操作和性能监控
+- 🚀 **独立运行**：转换为了exe，傻瓜式工具，双击即可运行。技术人员也可以使用powershell脚本
 
 ## 🚀 快速开始
 
@@ -32,6 +33,9 @@
 ```powershell
 # 查询本地计算机信息
 .\Get-SystemInfo.ps1
+
+# 非技术人员可以直接双击exe文件
+.\Get-SystemInfo.exe
 
 # 查询本地信息并保存到文件
 .\Get-SystemInfo.ps1 -SaveToFile -OutputPath "LocalInfo.txt"
