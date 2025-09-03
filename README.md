@@ -26,6 +26,9 @@
 ## 仓库结构
 ```
 常用Powershell脚本--包括域批量操作，批量远程操作等等/
+├── 📁 EnterpriseDomainJoin/
+│   ├── 📄 Join-DomainRemoteBatch-Parallel-Enhanced.ps1
+│   └── 📄 README.md
 ├── 📁 Set-HighPerformancePowerPlan/
 │   ├── 📄 Set-HighPerformancePowerPlan.cmd
 │   └── 📄 README.md
@@ -44,6 +47,8 @@
 ├── 📁 系统信息查询工具/
 │   ├── 📄 Get-SystemInfo.ps1
 │   └── 📄 README.md
+├── 📁 查询本地或远程Windows计算机当前登录用户信息/
+│   └── 📄 get-currentlogonuser.ps1
 ├── 🖼️ AI发烧友二维码.png
 └── 📄 README.md
 ```
@@ -59,6 +64,7 @@
 ### Active Directory 域管理
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
 |----------|----------|----------|----------|----------|
+| **企业域加入批量操作脚本（增强版）** | 企业级批量域加入工具，支持高性能并行处理（1-30台同时），智能预检查，分离式域加入验证，Windows Server 2012 R2兼容，断点续传，超时控制和智能重试机制 | 大规模域加入、企业系统部署、批量运维、域迁移 | 2025-09-03 | [📖 查看详情](./EnterpriseDomainJoin/README.md) |
 | **将源AD域中的用户账户批量同步至目标域中** | 跨域用户批量同步工具，支持用户属性映射、重复账户检测、邮件地址处理、操作结果统计和错误日志记录 | 域迁移、用户批量导入、多域环境管理 | 2025-06-16 | [📖 查看详情](./将源AD域中的用户账户批量同步至目标域中/README.md) |
 
 ### 本地/远程Windows系统管理
