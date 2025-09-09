@@ -711,6 +711,73 @@ function Test-UserInAdministratorsGroup {
     return $false
 }
 
+# 函数：使用WMI方法添加域账户到本地Administrators组（备用方法）
+function Add-DomainUserToAdministratorsGroupWMI {
+    param(
+        [string]$ComputerName,
+        [string]$DomainUser,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+    
+    try {
+        Write-ColorMessage "正在使用WMI方法添加用户..." $Colors.Info
+        Write-DetailedLog "开始使用WMI方法添加域账户到Administrators组: $DomainUser" "INFO" @{Category = "UserAdditionWMI"}
+        
+        # 解析域用户信息
+        $domain = ""
+        $username = ""
+        
+        if ($DomainUser -match '\\') {
+            $parts = $DomainUser -split '\\', 2
+            $domain = $parts[0]
+            $username = $parts[1]
+        } elseif ($DomainUser -match '@') {
+            $parts = $DomainUser -split '@', 2
+            $username = $parts[0]
+            $domain = $parts[1].Split('.')[0]
+        } else {
+            $domain = $env:USERDOMAIN
+            $username = $DomainUser
+        }
+        
+        Write-DebugMessage "WMI方法解析结果 - 域: $domain, 用户名: $username"
+        
+        # 确保使用正确的主机名
+        $wmiComputerName = Get-HostNameFromFQDN -ComputerName $ComputerName
+        if ($wmiComputerName -ne $ComputerName) {
+            Write-DebugMessage "WMI使用主机名: $ComputerName -> $wmiComputerName"
+        }
+        
+        # 获取本地Administrators组
+        $adminGroup = Invoke-WmiQuery -Class Win32_Group -ComputerName $wmiComputerName -Credential $Credential -Filter "Name='Administrators' AND LocalAccount=True"
+        
+        if (-not $adminGroup) {
+            throw "无法找到本地Administrators组"
+        }
+        
+        Write-DebugMessage "找到Administrators组: $($adminGroup.Name)"
+        
+        # 使用WMI的Add方法添加用户到组
+        $result = $adminGroup.Add("WinNT://$domain/$username")
+        
+        if ($result.ReturnValue -eq 0) {
+            Write-ColorMessage "✓ WMI方法成功将域账户 '$DomainUser' 添加到本地Administrators组" $Colors.Success
+            Write-DetailedLog "WMI方法成功添加域账户到Administrators组: $DomainUser" "INFO" @{Category = "UserAdditionWMI"}
+            return $true
+        } else {
+            $errorMsg = "WMI Add方法返回错误代码: $($result.ReturnValue)"
+            Write-ColorMessage "✗ $errorMsg" $Colors.Error
+            Write-DetailedLog "WMI Add方法失败: $errorMsg" "ERROR" @{Category = "UserAdditionWMI"}
+            return $false
+        }
+    }
+    catch {
+        Write-ColorMessage "✗ WMI方法执行失败: $($_.Exception.Message)" $Colors.Error
+        Write-DetailedLog "WMI方法执行失败: $($_.Exception.Message)" "ERROR" @{Category = "UserAdditionWMI"}
+        throw
+    }
+}
+
 # 函数：添加域账户到本地Administrators组
 function Add-DomainUserToAdministratorsGroup {
     param(
@@ -761,8 +828,15 @@ function Add-DomainUserToAdministratorsGroup {
             Write-DebugMessage "组路径: $groupPath"
             
             # 构建要添加用户的 ADSI 路径
-            $userPath = "WinNT://$Domain/$Username,user"
-            Write-DebugMessage "用户路径: $userPath"
+            # 对于域用户，使用正确的ADSI路径格式
+            if ($Domain -and $Username) {
+                # 根据你的环境，域是 mywind，使用最直接的路径格式
+                # 不添加 ,user 后缀，这通常会导致路径错误
+                $userPath = "WinNT://$Domain/$Username"
+                Write-DebugMessage "使用用户路径: $userPath"
+            } else {
+                throw "无法解析域用户信息：域='$Domain', 用户名='$Username'"
+            }
             
             # 获取组对象
             $groupObj = [ADSI]$groupPath
@@ -780,7 +854,15 @@ function Add-DomainUserToAdministratorsGroup {
         catch {
             Write-ColorMessage "✗ ADSI方法执行失败: $($_.Exception.Message)" $Colors.Error
             Write-DetailedLog "ADSI方法执行失败: $($_.Exception.Message)" "ERROR" @{Category = "UserAddition"}
-            return $false
+            
+            # 如果ADSI方法失败，尝试使用WMI方法作为备用
+            Write-ColorMessage "尝试使用WMI方法作为备用..." $Colors.Warning
+            try {
+                return Add-DomainUserToAdministratorsGroupWMI -ComputerName $ComputerName -DomainUser $DomainUser -Credential $Credential
+            } catch {
+                Write-ColorMessage "✗ WMI备用方法也失败: $($_.Exception.Message)" $Colors.Error
+                return $false
+            }
         }
     }
     catch {
