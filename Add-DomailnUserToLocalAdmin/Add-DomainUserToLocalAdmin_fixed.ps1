@@ -861,7 +861,7 @@ function Add-DomainUserToAdministratorsGroup {
                 return Add-DomainUserToAdministratorsGroupWMI -ComputerName $ComputerName -DomainUser $DomainUser -Credential $Credential
             } catch {
                 Write-ColorMessage "✗ WMI备用方法也失败: $($_.Exception.Message)" $Colors.Error
-                return $false
+            return $false
             }
         }
     }

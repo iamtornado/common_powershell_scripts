@@ -109,6 +109,16 @@ param(
     
     [Parameter(Mandatory = $true, HelpMessage = "要加入的域名")]
     [ValidateNotNullOrEmpty()]
+    [ValidateScript({
+        # 验证域名格式：支持FQDN和短域名
+        # FQDN格式：example.com, subdomain.example.com
+        # 短域名格式：EXAMPLE
+        if ($_ -match '^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$' -or 
+            $_ -match '^[a-zA-Z0-9][a-zA-Z0-9\-]{0,14}$') {
+            return $true
+        }
+        throw "域名格式无效。请使用有效的域名格式（如：contoso.com 或 CONTOSO）"
+    })]
     [string]$DomainName,
     
     [Parameter(Mandatory = $true, HelpMessage = "域控制器服务器名称")]
@@ -164,7 +174,8 @@ param(
 )
 
 # 设置错误处理
-$ErrorActionPreference = "Stop"
+# 注意：不使用 "Stop"，以便单个计算机失败时不会终止整个脚本
+$ErrorActionPreference = "Continue"
 
 # 创建线程安全的日志对象和统计对象
 $script:LogLock = [System.Object]::new()
@@ -268,7 +279,7 @@ function Save-ProgressState {
         try {
             $progressState = @{
                 Timestamp = Get-Date
-                CompletedComputers = $AllResults | Where-Object { $_.Status -in @("操作成功", "已正确配置", "操作失败", "连通性失败", "状态检查失败") }
+                CompletedComputers = $AllResults | Where-Object { $_.Status -in @("操作成功", "已正确配置", "操作失败", "状态检查失败") }
                 RemainingComputers = $RemainingComputers
                 Statistics = $script:Stats.Clone()
             }
@@ -339,8 +350,22 @@ $ProcessComputerScriptBlock = {
         $LocalCredential,
         $DomainCredential,
         $LogFile,
-        $MaxRetries
+        $MaxRetries,
+        $LocalAdminUsername
     )
+    
+    # 辅助函数：为当前计算机动态构建本地管理员凭据
+    function Get-LocalCredentialForComputer {
+        param($ComputerName, $BaseCredential, $LocalAdminUsername)
+        
+        # 构建格式：计算机名\用户名
+        $localUserName = "$ComputerName\$LocalAdminUsername"
+        # 从基础凭据中提取密码
+        $password = $BaseCredential.GetNetworkCredential().Password
+        # 创建新的凭据对象
+        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+        return New-Object System.Management.Automation.PSCredential($localUserName, $securePassword)
+    }
     
     # 作业内部函数定义
     function Write-JobLog {
@@ -365,13 +390,16 @@ $ProcessComputerScriptBlock = {
     
     # 带重试的连通性测试
     function Test-JobRemoteComputerWithRetry {
-        param($ComputerName, $Credential, $MaxRetries)
+        param($ComputerName, $BaseCredential, $MaxRetries, $LocalAdminUsername)
+        
+        # 为当前计算机动态构建凭据
+        $localCredential = Get-LocalCredentialForComputer -ComputerName $ComputerName -BaseCredential $BaseCredential -LocalAdminUsername $LocalAdminUsername
         
         for ($retry = 0; $retry -le $MaxRetries; $retry++) {
             try {
                 # 测试WinRM连通性
                 $sessionOption = New-PSSessionOption -OpenTimeout 30000 -CancelTimeout 15000
-                $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -SessionOption $sessionOption -ErrorAction Stop
+                $session = New-PSSession -ComputerName $ComputerName -Credential $localCredential -SessionOption $sessionOption -ErrorAction Stop
                 Remove-PSSession $session
                 
                 return @{ Success = $true; Error = $null; Retries = $retry }
@@ -387,11 +415,14 @@ $ProcessComputerScriptBlock = {
     
     # 获取远程计算机状态（带超时）
     function Get-JobRemoteComputerStatus {
-        param($ComputerName, $Credential, $ExpectedDomain, $ExpectedPrimaryDNS, $ExpectedSecondaryDNS)
+        param($ComputerName, $BaseCredential, $ExpectedDomain, $ExpectedPrimaryDNS, $ExpectedSecondaryDNS, $LocalAdminUsername)
+        
+        # 为当前计算机动态构建凭据
+        $localCredential = Get-LocalCredentialForComputer -ComputerName $ComputerName -BaseCredential $BaseCredential -LocalAdminUsername $LocalAdminUsername
         
         try {
             $sessionOption = New-PSSessionOption -OpenTimeout 30000 -OperationTimeout 60000
-            $result = Invoke-Command -ComputerName $ComputerName -Credential $Credential -SessionOption $sessionOption -ScriptBlock {
+            $result = Invoke-Command -ComputerName $ComputerName -Credential $localCredential -SessionOption $sessionOption -ScriptBlock {
                 param($ExpectedDomain, $ExpectedPrimaryDNS, $ExpectedSecondaryDNS)
                 
                 try {
@@ -487,7 +518,10 @@ $ProcessComputerScriptBlock = {
     
     # 执行域加入操作（带重试）
     function Join-JobRemoteComputerToDomain {
-        param($ComputerName, $LocalCredential, $DomainCredential, $DomainName, $DomainController, $PrimaryDNS, $SecondaryDNS, $InterfaceIndex, $SkipRestart, $MaxRetries)
+        param($ComputerName, $BaseCredential, $DomainCredential, $DomainName, $DomainController, $PrimaryDNS, $SecondaryDNS, $InterfaceIndex, $SkipRestart, $MaxRetries, $LocalAdminUsername)
+        
+        # 为当前计算机动态构建凭据
+        $localCredential = Get-LocalCredentialForComputer -ComputerName $ComputerName -BaseCredential $BaseCredential -LocalAdminUsername $LocalAdminUsername
         
         for ($retry = 0; $retry -le $MaxRetries; $retry++) {
             try {
@@ -498,7 +532,7 @@ $ProcessComputerScriptBlock = {
                 }
                 
                 $sessionOption = New-PSSessionOption -OpenTimeout 30000 -OperationTimeout 300000  # 5分钟超时
-                $result = Invoke-Command -ComputerName $ComputerName -Credential $LocalCredential -SessionOption $sessionOption -ScriptBlock {
+                $result = Invoke-Command -ComputerName $ComputerName -Credential $localCredential -SessionOption $sessionOption -ScriptBlock {
                     param($DnsServers, $InterfaceIndex, $DomainCredential, $DomainName, $DomainController, $SkipRestart)
                     
                     try {
@@ -634,11 +668,23 @@ $ProcessComputerScriptBlock = {
                 }
             }
             catch {
+                $errorDetails = @(
+                    "异常类型: $($_.Exception.GetType().FullName)",
+                    "异常消息: $($_.Exception.Message)"
+                )
+                if ($_.Exception.InnerException) {
+                    $errorDetails += "内部异常: $($_.Exception.InnerException.Message)"
+                }
+                if ($_.ScriptStackTrace) {
+                    $errorDetails += "调用堆栈: $($_.ScriptStackTrace)"
+                }
+                $errorMessage = "域加入操作异常: " + ($errorDetails -join " | ")
+                
                 if ($retry -eq $MaxRetries) {
                     return @{
                         Success = $false
                         Result = $null
-                        Message = "域加入操作异常: $($_.Exception.Message)"
+                        Message = $errorMessage
                         Retries = $retry
                         DNSServers = @()
                     }
@@ -664,7 +710,7 @@ $ProcessComputerScriptBlock = {
         $result.Logs += Write-JobLog "开始处理计算机: $ComputerName" "INFO"
         
         # 验证连通性（带重试）
-        $connectTest = Test-JobRemoteComputerWithRetry -ComputerName $ComputerName -Credential $LocalCredential -MaxRetries $MaxRetries
+        $connectTest = Test-JobRemoteComputerWithRetry -ComputerName $ComputerName -BaseCredential $LocalCredential -MaxRetries $MaxRetries -LocalAdminUsername $LocalAdminUsername
         $result.Retries += $connectTest.Retries
         
         if (-not $connectTest.Success) {
@@ -681,7 +727,7 @@ $ProcessComputerScriptBlock = {
         }
         
         # 检查当前状态
-        $status = Get-JobRemoteComputerStatus -ComputerName $ComputerName -Credential $LocalCredential -ExpectedDomain $DomainName -ExpectedPrimaryDNS $PrimaryDNS -ExpectedSecondaryDNS $SecondaryDNS
+        $status = Get-JobRemoteComputerStatus -ComputerName $ComputerName -BaseCredential $LocalCredential -ExpectedDomain $DomainName -ExpectedPrimaryDNS $PrimaryDNS -ExpectedSecondaryDNS $SecondaryDNS -LocalAdminUsername $LocalAdminUsername
         
         if ($status.Error) {
             $result.Status = "状态检查错误"
@@ -709,6 +755,7 @@ $ProcessComputerScriptBlock = {
             } else {
                 $result.Logs += Write-JobLog "✅ 计算机 $ComputerName 配置已正确，跳过操作" "SUCCESS"
             }
+            
             return $result
         }
         
@@ -736,7 +783,7 @@ $ProcessComputerScriptBlock = {
         
         # 执行域加入操作（带重试）
         $result.Logs += Write-JobLog "开始对计算机 $ComputerName 执行域加入操作" "INFO"
-        $joinResult = Join-JobRemoteComputerToDomain -ComputerName $ComputerName -LocalCredential $LocalCredential -DomainCredential $DomainCredential -DomainName $DomainName -DomainController $DomainController -PrimaryDNS $PrimaryDNS -SecondaryDNS $SecondaryDNS -InterfaceIndex $interfaceIndex -SkipRestart $SkipRestart -MaxRetries $MaxRetries
+        $joinResult = Join-JobRemoteComputerToDomain -ComputerName $ComputerName -BaseCredential $LocalCredential -DomainCredential $DomainCredential -DomainName $DomainName -DomainController $DomainController -PrimaryDNS $PrimaryDNS -SecondaryDNS $SecondaryDNS -InterfaceIndex $interfaceIndex -SkipRestart $SkipRestart -MaxRetries $MaxRetries -LocalAdminUsername $LocalAdminUsername
         
         $result.Retries += $joinResult.Retries
         $result.DNSServers = $joinResult.DNSServers
@@ -752,13 +799,31 @@ $ProcessComputerScriptBlock = {
         } else {
             $result.Status = "操作失败"
             $result.Action = "请检查日志"
-            $result.Logs += Write-JobLog "计算机 $ComputerName 域加入操作失败 (重试${($joinResult.Retries)}次): $($joinResult.Message)" "ERROR"
+            $errorMessage = "计算机 $ComputerName 域加入操作失败 (重试${($joinResult.Retries)}次): $($joinResult.Message)"
+            $result.Logs += Write-JobLog $errorMessage "ERROR"
+            # 记录详细的错误信息
+            if ($joinResult.Message -and $joinResult.Message.Length -gt 0) {
+                $result.Logs += Write-JobLog "详细错误信息: $($joinResult.Message)" "ERROR"
+            }
         }
     }
     catch {
         $result.Status = "处理异常"
         $result.Action = "异常终止"
-        $result.Logs += Write-JobLog "计算机 $ComputerName 处理异常: $($_.Exception.Message)" "ERROR"
+        $errorDetails = @(
+            "异常类型: $($_.Exception.GetType().FullName)",
+            "异常消息: $($_.Exception.Message)",
+            "错误位置: $($_.InvocationInfo.ScriptLineNumber)行",
+            "命令: $($_.InvocationInfo.Line.Trim())"
+        )
+        if ($_.Exception.InnerException) {
+            $errorDetails += "内部异常: $($_.Exception.InnerException.Message)"
+        }
+        if ($_.ScriptStackTrace) {
+            $errorDetails += "调用堆栈: $($_.ScriptStackTrace)"
+        }
+        $errorMessage = "计算机 $ComputerName 处理异常: " + ($errorDetails -join " | ")
+        $result.Logs += Write-JobLog $errorMessage "ERROR"
     }
     finally {
         $result.EndTime = Get-Date
@@ -782,6 +847,7 @@ if (-not $absoluteLogPath) {
     $absoluteLogPath = Join-Path (Get-Location).Path (Split-Path $LogFile -Leaf)
 }
 Write-Log "📄 日志文件: $absoluteLogPath" -Level "INFO"
+
 Write-Log "参数配置:" -Level "INFO"
 Write-Log "  计算机列表文件: $ComputerListFile" -Level "INFO"
 Write-Log "  目标域: $DomainName" -Level "INFO"
@@ -835,8 +901,10 @@ try {
     $script:Stats.ProcessedCount = $allResults.Count
     
     # 获取凭据（使用指定的用户名）
-    Write-Log "请提供本地管理员凭据（用户名: $LocalAdminUsername）..." -Level "INFO"
-    $localCredential = Get-Credential -UserName $LocalAdminUsername -Message "请输入本地管理员凭据"
+    # 注意：脚本会自动为每台计算机构建 计算机名\用户名 格式的凭据
+    Write-Log "请提供本地管理员凭据（用户名将自动构建为: 计算机名\$LocalAdminUsername）..." -Level "INFO"
+    Write-Log "提示：在凭据对话框中，您可以输入任意用户名（如: .\$LocalAdminUsername），重要的是密码" -Level "INFO"
+    $localCredential = Get-Credential -UserName ".\$LocalAdminUsername" -Message "请输入本地管理员密码（用户名将自动构建为: 计算机名\$LocalAdminUsername）"
     
     Write-Log "请提供域管理员凭据（用户名: $DomainName\$DomainAdminUsername）..." -Level "INFO"
     $domainUserName = "$DomainName\$DomainAdminUsername"
@@ -882,7 +950,8 @@ try {
                 $localCredential,
                 $domainCredential,
                 $LogFile,
-                $MaxRetries
+                $MaxRetries,
+                $LocalAdminUsername
             )
             
             $jobs += @{
@@ -925,11 +994,121 @@ try {
                     Write-Log "进度: $($script:Stats.ProcessedCount)/$($script:Stats.TotalComputers) - $($timeoutJob.ComputerName): 处理超时" -Level "PROGRESS"
                 }
                 
+                # 处理失败的作业
+                $failedJobs = $jobs | Where-Object { $_.Job.State -eq 'Failed' }
+                foreach ($failedJob in $failedJobs) {
+                    Write-Log "检测到失败的作业: $($failedJob.ComputerName)" -Level "ERROR"
+                    $errorMessage = "作业执行失败，但未返回错误信息"
+                    try {
+                        $errorRecord = Receive-Job -Job $failedJob.Job -ErrorAction Stop
+                        if ($errorRecord) {
+                            if ($errorRecord -is [System.Management.Automation.ErrorRecord]) {
+                                $errorMessage = "错误类型: $($errorRecord.Exception.GetType().FullName) | 错误消息: $($errorRecord.Exception.Message)"
+                                if ($errorRecord.Exception.InnerException) {
+                                    $errorMessage += " | 内部异常: $($errorRecord.Exception.InnerException.Message)"
+                                }
+                                if ($errorRecord.ScriptStackTrace) {
+                                    $errorMessage += " | 调用堆栈: $($errorRecord.ScriptStackTrace)"
+                                }
+                            } else {
+                                $errorMessage = $errorRecord | Out-String
+                            }
+                        }
+                        Write-Log "作业 $($failedJob.ComputerName) 失败详情: $errorMessage" -Level "ERROR"
+                    }
+                    catch {
+                        $errorMessage = "获取错误信息时出错: $($_.Exception.Message)"
+                        Write-Log "获取失败作业 $($failedJob.ComputerName) 的错误信息时出错: $($_.Exception.Message)" -Level "ERROR"
+                        Write-Log "错误堆栈: $($_.Exception.StackTrace)" -Level "ERROR"
+                    }
+                    
+                    # 创建失败结果对象
+                    $failedResult = @{
+                        ComputerName = $failedJob.ComputerName
+                        Status = "作业执行失败"
+                        Action = "请检查日志"
+                        StartTime = $failedJob.StartTime
+                        EndTime = Get-Date
+                        Logs = @(@{
+                            Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 作业执行失败: $errorMessage"
+                            Level = "ERROR"
+                        })
+                        Retries = 0
+                        DNSServers = @()
+                    }
+                    
+                    $allResults += $failedResult
+                    Update-Stats -Type "Processed"
+                    Update-Stats -Type "Failure"
+                    
+                    try {
+                        Remove-Job -Job $failedJob.Job -Force -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Log "清理失败作业时出错: $($failedJob.ComputerName) - $($_.Exception.Message)" -Level "WARNING"
+                    }
+                    
+                    $jobs = $jobs | Where-Object { $_.Job.Id -ne $failedJob.Job.Id }
+                    Update-ProgressBar -CurrentCount $script:Stats.ProcessedCount -TotalCount $script:Stats.TotalComputers -Status "作业失败: $($failedJob.ComputerName)"
+                    Write-Log "进度: $($script:Stats.ProcessedCount)/$($script:Stats.TotalComputers) - $($failedJob.ComputerName): 作业执行失败" -Level "ERROR"
+                }
+                
                 # 处理完成的作业
                 $completedJobs = $jobs | Where-Object { $_.Job.State -eq 'Completed' }
                 foreach ($completedJob in $completedJobs) {
-                    $result = Receive-Job -Job $completedJob.Job
-                    Remove-Job -Job $completedJob.Job
+                    try {
+                        $jobOutput = Receive-Job -Job $completedJob.Job -ErrorAction Stop
+                        
+                        # 处理数组情况：如果作业返回了多个对象（比如Write-JobLog的返回值），取最后一个（应该是$result）
+                        if ($jobOutput -is [System.Array] -and $jobOutput.Count -gt 0) {
+                            $result = $jobOutput[-1]  # 取最后一个元素
+                        } else {
+                            $result = $jobOutput
+                        }
+                        
+                        # 验证结果对象是否有效
+                        if (-not $result -or -not $result.ComputerName) {
+                            Write-Log "作业 $($completedJob.ComputerName) 返回了无效结果，创建默认结果对象" -Level "WARNING"
+                            $result = @{
+                                ComputerName = $completedJob.ComputerName
+                                Status = "结果解析失败"
+                                Action = "请检查日志"
+                                StartTime = $completedJob.StartTime
+                                EndTime = Get-Date
+                                Logs = @(@{
+                                    Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 作业返回了无效结果"
+                                    Level = "ERROR"
+                                })
+                                Retries = 0
+                                DNSServers = @()
+                            }
+                        }
+                    }
+                    catch {
+                        Write-Log "接收作业 $($completedJob.ComputerName) 结果时出错: $($_.Exception.Message)" -Level "ERROR"
+                        
+                        # 创建错误结果对象
+                        $result = @{
+                            ComputerName = $completedJob.ComputerName
+                            Status = "结果接收失败"
+                            Action = "请检查日志"
+                            StartTime = $completedJob.StartTime
+                            EndTime = Get-Date
+                            Logs = @(@{
+                                Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 接收作业结果失败: $($_.Exception.Message)"
+                                Level = "ERROR"
+                            })
+                            Retries = 0
+                            DNSServers = @()
+                        }
+                    }
+                    
+                    try {
+                        Remove-Job -Job $completedJob.Job -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Log "清理作业失败: $($completedJob.ComputerName) - $($_.Exception.Message)" -Level "WARNING"
+                    }
                     
                     # 更新统计
                     Update-Stats -Type "Processed"
@@ -980,7 +1159,15 @@ try {
                 
                 # 定期保存进度
                 if ($script:Stats.ProcessedCount % 10 -eq 0) {
-                    Save-ProgressState -AllResults $allResults -RemainingComputers ($computers | Select-Object -Skip $script:Stats.ProcessedCount)
+                    # 计算剩余计算机：已处理的计算机名称 + 当前批次剩余 + 后续批次
+                    $processedComputerNames = $allResults | ForEach-Object { $_.ComputerName }
+                    $remainingInCurrentBatch = $currentBatch | Where-Object { $_ -notin $processedComputerNames }
+                    $remainingBatches = @()
+                    for ($nextBatchIndex = $batchIndex + 1; $nextBatchIndex -lt $batches.Count; $nextBatchIndex++) {
+                        $remainingBatches += $batches[$nextBatchIndex]
+                    }
+                    $remainingComputers = $remainingInCurrentBatch + ($remainingBatches | ForEach-Object { $_ })
+                    Save-ProgressState -AllResults $allResults -RemainingComputers $remainingComputers
                 }
             }
         }
@@ -1018,11 +1205,121 @@ try {
                 Write-Log "进度: $($script:Stats.ProcessedCount)/$($script:Stats.TotalComputers) - $($timeoutJob.ComputerName): 处理超时" -Level "ERROR"
             }
             
+            # 处理失败的作业
+            $failedJobs = $jobs | Where-Object { $_.Job.State -eq 'Failed' }
+            foreach ($failedJob in $failedJobs) {
+                Write-Log "检测到失败的作业: $($failedJob.ComputerName)" -Level "ERROR"
+                $errorMessage = "作业执行失败，但未返回错误信息"
+                try {
+                    $errorRecord = Receive-Job -Job $failedJob.Job -ErrorAction Stop
+                    if ($errorRecord) {
+                        if ($errorRecord -is [System.Management.Automation.ErrorRecord]) {
+                            $errorMessage = "错误类型: $($errorRecord.Exception.GetType().FullName) | 错误消息: $($errorRecord.Exception.Message)"
+                            if ($errorRecord.Exception.InnerException) {
+                                $errorMessage += " | 内部异常: $($errorRecord.Exception.InnerException.Message)"
+                            }
+                            if ($errorRecord.ScriptStackTrace) {
+                                $errorMessage += " | 调用堆栈: $($errorRecord.ScriptStackTrace)"
+                            }
+                        } else {
+                            $errorMessage = $errorRecord | Out-String
+                        }
+                    }
+                    Write-Log "作业 $($failedJob.ComputerName) 失败详情: $errorMessage" -Level "ERROR"
+                }
+                catch {
+                    $errorMessage = "获取错误信息时出错: $($_.Exception.Message)"
+                    Write-Log "获取失败作业 $($failedJob.ComputerName) 的错误信息时出错: $($_.Exception.Message)" -Level "ERROR"
+                    Write-Log "错误堆栈: $($_.Exception.StackTrace)" -Level "ERROR"
+                }
+                
+                # 创建失败结果对象
+                $failedResult = @{
+                    ComputerName = $failedJob.ComputerName
+                    Status = "作业执行失败"
+                    Action = "请检查日志"
+                    StartTime = $failedJob.StartTime
+                    EndTime = Get-Date
+                    Logs = @(@{
+                        Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 作业执行失败: $errorMessage"
+                        Level = "ERROR"
+                    })
+                    Retries = 0
+                    DNSServers = @()
+                }
+                
+                $allResults += $failedResult
+                Update-Stats -Type "Processed"
+                Update-Stats -Type "Failure"
+                
+                try {
+                    Remove-Job -Job $failedJob.Job -Force -ErrorAction Stop
+                }
+                catch {
+                    Write-Log "清理失败作业时出错: $($failedJob.ComputerName) - $($_.Exception.Message)" -Level "WARNING"
+                }
+                
+                $jobs = $jobs | Where-Object { $_.Job.Id -ne $failedJob.Job.Id }
+                Update-ProgressBar -CurrentCount $script:Stats.ProcessedCount -TotalCount $script:Stats.TotalComputers -Status "作业失败: $($failedJob.ComputerName)"
+                Write-Log "进度: $($script:Stats.ProcessedCount)/$($script:Stats.TotalComputers) - $($failedJob.ComputerName): 作业执行失败" -Level "ERROR"
+            }
+            
             # 处理完成的作业
             $completedJobs = $jobs | Where-Object { $_.Job.State -eq 'Completed' }
             foreach ($completedJob in $completedJobs) {
-                $result = Receive-Job -Job $completedJob.Job
-                Remove-Job -Job $completedJob.Job
+                try {
+                    $jobOutput = Receive-Job -Job $completedJob.Job -ErrorAction Stop
+                    
+                    # 处理数组情况：如果作业返回了多个对象（比如Write-JobLog的返回值），取最后一个（应该是$result）
+                    if ($jobOutput -is [System.Array] -and $jobOutput.Count -gt 0) {
+                        $result = $jobOutput[-1]  # 取最后一个元素
+                    } else {
+                        $result = $jobOutput
+                    }
+                    
+                    # 验证结果对象是否有效
+                    if (-not $result -or -not $result.ComputerName) {
+                        Write-Log "作业 $($completedJob.ComputerName) 返回了无效结果，创建默认结果对象" -Level "WARNING"
+                        $result = @{
+                            ComputerName = $completedJob.ComputerName
+                            Status = "结果解析失败"
+                            Action = "请检查日志"
+                            StartTime = $completedJob.StartTime
+                            EndTime = Get-Date
+                            Logs = @(@{
+                                Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 作业返回了无效结果"
+                                Level = "ERROR"
+                            })
+                            Retries = 0
+                            DNSServers = @()
+                        }
+                    }
+                }
+                catch {
+                    Write-Log "接收作业 $($completedJob.ComputerName) 结果时出错: $($_.Exception.Message)" -Level "ERROR"
+                    
+                    # 创建错误结果对象
+                    $result = @{
+                        ComputerName = $completedJob.ComputerName
+                        Status = "结果接收失败"
+                        Action = "请检查日志"
+                        StartTime = $completedJob.StartTime
+                        EndTime = Get-Date
+                        Logs = @(@{
+                            Message = "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff'))] [JOB] [ERROR] 接收作业结果失败: $($_.Exception.Message)"
+                            Level = "ERROR"
+                        })
+                        Retries = 0
+                        DNSServers = @()
+                    }
+                }
+                
+                try {
+                    Remove-Job -Job $completedJob.Job -ErrorAction Stop
+                }
+                catch {
+                    Write-Log "清理作业失败: $($completedJob.ComputerName) - $($_.Exception.Message)" -Level "WARNING"
+                }
                 
                 # 更新统计
                 Update-Stats -Type "Processed"
@@ -1083,7 +1380,15 @@ try {
         }
         
         # 保存进度状态
-        Save-ProgressState -AllResults $allResults -RemainingComputers ($computers | Select-Object -Skip $script:Stats.ProcessedCount)
+        # 计算剩余计算机：已处理的计算机名称 + 当前批次剩余 + 后续批次
+        $processedComputerNames = $allResults | ForEach-Object { $_.ComputerName }
+        $remainingInCurrentBatch = $currentBatch | Where-Object { $_ -notin $processedComputerNames }
+        $remainingBatches = @()
+        for ($nextBatchIndex = $batchIndex + 1; $nextBatchIndex -lt $batches.Count; $nextBatchIndex++) {
+            $remainingBatches += $batches[$nextBatchIndex]
+        }
+        $remainingComputers = $remainingInCurrentBatch + ($remainingBatches | ForEach-Object { $_ })
+        Save-ProgressState -AllResults $allResults -RemainingComputers $remainingComputers
     }
     
     # 完成进度条
@@ -1162,20 +1467,49 @@ try {
         }
     }
     
-    # 失败的计算机
+    # 失败的计算机（详细分类）
     $failed = $allResults | Where-Object { $_.Status -notin @("已正确配置", "操作成功") }
     if ($failed.Count -gt 0) {
         Write-Log " " -Level "INFO"
         Write-Log "❌ 处理失败的计算机 ($($failed.Count) 台):" -Level "ERROR"
-        foreach ($result in $failed) {
-            $duration = if ($result.EndTime -and $result.StartTime) { 
-                [math]::Round(($result.EndTime - $result.StartTime).TotalSeconds, 1) 
-            } else { 
-                "N/A" 
+        
+        # 按失败类型分类
+        $failedByType = $failed | Group-Object -Property Status
+        foreach ($failureGroup in $failedByType) {
+            Write-Log "  " -Level "INFO"
+            Write-Log "  📋 失败类型: $($failureGroup.Name) ($($failureGroup.Count) 台)" -Level "ERROR"
+            
+            foreach ($result in $failureGroup.Group) {
+                $duration = if ($result.EndTime -and $result.StartTime) { 
+                    [math]::Round(($result.EndTime - $result.StartTime).TotalSeconds, 1) 
+                } else { 
+                    "N/A" 
+                }
+                $retryInfo = if ($result.Retries -gt 0) { " (重试:$($result.Retries))" } else { "" }
+                
+                # 提取错误信息
+                $errorMessages = $result.Logs | Where-Object { $_.Level -eq "ERROR" } | ForEach-Object { $_.Message }
+                $errorSummary = if ($errorMessages) {
+                    $firstError = ($errorMessages[0] -split ':')[1..-1] -join ':'
+                    if ($firstError.Length -gt 100) {
+                        $firstError.Substring(0, 100) + "..."
+                    } else {
+                        $firstError
+                    }
+                } else {
+                    "无详细错误信息"
+                }
+                
+                Write-Log "    ❌ $($result.ComputerName): $($result.Status) - $($result.Action) (耗时:${duration}s)${retryInfo}" -Level "ERROR"
+                Write-Log "       错误详情: $errorSummary" -Level "ERROR"
             }
-            $retryInfo = if ($result.Retries -gt 0) { " (重试:$($result.Retries))" } else { "" }
-            Write-Log "  ❌ $($result.ComputerName): $($result.Status) - $($result.Action) (耗时:${duration}s)${retryInfo}" -Level "ERROR"
         }
+        
+        # 输出失败计算机列表（便于后续处理）
+        Write-Log " " -Level "INFO"
+        Write-Log "  📝 失败计算机列表（便于后续处理）:" -Level "ERROR"
+        $failedList = $failed | ForEach-Object { $_.ComputerName }
+        Write-Log "    $($failedList -join ', ')" -Level "ERROR"
     }
     
     # 清理断点续传文件
@@ -1200,7 +1534,16 @@ try {
 }
 catch {
     Write-Log "脚本执行发生致命错误: $($_.Exception.Message)" -Level "ERROR"
-    Write-Log "错误详情: $($_.Exception.StackTrace)" -Level "ERROR"
+    Write-Log "错误类型: $($_.Exception.GetType().FullName)" -Level "ERROR"
+    Write-Log "错误位置: $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)" -Level "ERROR"
+    Write-Log "错误命令: $($_.InvocationInfo.Line.Trim())" -Level "ERROR"
+    if ($_.Exception.InnerException) {
+        Write-Log "内部异常: $($_.Exception.InnerException.Message)" -Level "ERROR"
+    }
+    Write-Log "错误堆栈: $($_.Exception.StackTrace)" -Level "ERROR"
+    if ($_.ScriptStackTrace) {
+        Write-Log "脚本堆栈: $($_.ScriptStackTrace)" -Level "ERROR"
+    }
     Write-Log " " -Level "INFO"
     # 获取日志文件的绝对路径用于错误显示
     $errorLogPath = (Resolve-Path $LogFile -ErrorAction SilentlyContinue).Path
@@ -1210,14 +1553,68 @@ catch {
     Write-Log "📄 详细日志文件路径: $errorLogPath" -Level "ERROR"
     Write-Log "   请查看此文件获取完整的错误信息和执行详情" -Level "ERROR"
     
-    # 保存错误状态
-    if ($allResults) {
-        Save-ProgressState -AllResults $allResults -RemainingComputers ($computers | Select-Object -Skip $script:Stats.ProcessedCount)
+    # 保存错误状态（安全地检查变量是否存在）
+    try {
+        if (Test-Path variable:allResults -ErrorAction SilentlyContinue) {
+            if ($allResults -and $allResults.Count -gt 0) {
+                # 计算剩余计算机
+                $remainingComputers = @()
+                $processedComputerNames = $allResults | ForEach-Object { $_.ComputerName }
+                
+                # 尝试从批次信息计算剩余计算机
+                $hasBatches = Test-Path variable:batches -ErrorAction SilentlyContinue
+                if ($hasBatches -and $batches) {
+                    $hasBatchIndex = Test-Path variable:batchIndex -ErrorAction SilentlyContinue
+                    if ($hasBatchIndex) {
+                        # 当前批次剩余 + 后续批次
+                        if ($batchIndex -ge 0 -and $batchIndex -lt $batches.Count) {
+                            $currentBatch = $batches[$batchIndex]
+                            $remainingInCurrentBatch = $currentBatch | Where-Object { $_ -notin $processedComputerNames }
+                            $remainingBatches = @()
+                            for ($nextBatchIndex = $batchIndex + 1; $nextBatchIndex -lt $batches.Count; $nextBatchIndex++) {
+                                $remainingBatches += $batches[$nextBatchIndex]
+                            }
+                            $remainingComputers = $remainingInCurrentBatch + ($remainingBatches | ForEach-Object { $_ })
+                        }
+                    } else {
+                        # 如果batchIndex不存在，说明还没开始处理批次，使用原始computers列表
+                        $hasComputers = Test-Path variable:computers -ErrorAction SilentlyContinue
+                        if ($hasComputers -and $computers) {
+                            $remainingComputers = $computers | Where-Object { $_ -notin $processedComputerNames }
+                        }
+                    }
+                } else {
+                    # 如果没有批次信息，使用原始computers列表
+                    $hasComputers = Test-Path variable:computers -ErrorAction SilentlyContinue
+                    if ($hasComputers -and $computers) {
+                        $remainingComputers = $computers | Where-Object { $_ -notin $processedComputerNames }
+                    }
+                }
+                
+                Save-ProgressState -AllResults $allResults -RemainingComputers $remainingComputers
+            }
+        }
+    }
+    catch {
+        Write-Log "保存错误状态时出错: $($_.Exception.Message)" -Level "WARNING"
     }
     
     exit 1
 }
 finally {
+    # 清理所有剩余的作业
+    try {
+        $remainingJobs = Get-Job -ErrorAction SilentlyContinue
+        if ($remainingJobs) {
+            Write-Log "清理 $($remainingJobs.Count) 个剩余作业..." -Level "DEBUG"
+            $remainingJobs | Stop-Job -ErrorAction SilentlyContinue
+            $remainingJobs | Remove-Job -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-Log "清理剩余作业时出错: $($_.Exception.Message)" -Level "WARNING"
+    }
+    
     # 清理资源
     Write-Log "清理系统资源..." -Level "DEBUG"
     [System.GC]::Collect()
