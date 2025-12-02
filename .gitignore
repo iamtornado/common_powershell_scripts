@@ -43,3 +43,6 @@ $RECYCLE.BIN/
 *.rar
 *.7z
 *.tar.gz
+
+*.txt
+*.csv
