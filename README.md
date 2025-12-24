@@ -49,6 +49,12 @@
 │   └── 📄 README.md
 ├── 📁 查询本地或远程Windows计算机当前登录用户信息/
 │   └── 📄 get-currentlogonuser.ps1
+├── 📁 Get-RemoteHostInfo/
+│   ├── 📄 Get-RemoteHostInfo.ps1
+│   └── 📄 README.md
+├── 📁 Install-Fonts/
+│   ├── 📄 Install-Fonts.ps1
+│   └── 📄 README.md
 ├── 🖼️ AI发烧友二维码.png
 └── 📄 README.md
 ```
@@ -74,6 +80,8 @@
 | **Add-DomailnUserToLocalAdmin** | 域账户本地管理员添加工具，使用基于DCOM的WMI连接，支持网络连通性检测、远程计算机信息收集、详细错误处理和调试输出 | 远程权限管理、批量运维、桌面支持 | 2025-07-31 | [📖 查看详情](./Add-DomailnUserToLocalAdmin/README.md) |
 | **通过ADSI查询远程Windows计算机管理员组成员** | 基于ADSI技术的远程管理员组查询工具，支持本地/域账户识别、连通性检查、权限验证和错误处理 | 安全审计、权限管理、系统监控、合规检查 | 2025-07-31 | [📖 查看详情](./通过ADSI查询远程Windows计算机管理员组成员/README.md) |
 | **系统信息查询工具** | 功能强大的Windows系统信息查询工具，支持本地/远程查询，使用高效的基于DCOM的CIM会话，自动收集计算机名、网络配置（含DNS）、管理员组成员、用户会话等信息，支持调试模式、超时控制、自动剪切板复制和文件保存，现已转换为独立可执行文件，双击即可查询计算机信息 | IT技术支持、故障诊断、资产管理、远程运维、系统监控 | 2025-08-01 | [📖 查看详情](./系统信息查询工具/README.md) |
+| **Get-RemoteHostInfo** | 远程主机信息查询工具，通过WinRM批量查询远程Windows主机的计算机名、IP地址和MAC地址，支持并行处理、智能重试、超时控制和CSV导出 | 批量资产管理、网络监控、远程运维、系统审计 | 最新 | [📖 查看详情](./Get-RemoteHostInfo/README.md) |
+| **Install-Fonts** | 字体批量安装工具，支持批量安装字体文件（.ttf、.ttc、.otf）到Windows系统字体目录，自动跳过已安装的字体，完善的错误处理和统计信息 | 系统部署、字体管理、批量安装、桌面运维 | 最新 | [📖 查看详情](./Install-Fonts/README.md) |
 
 ### 防止计算机息屏,进入屏保和睡眠工具
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
