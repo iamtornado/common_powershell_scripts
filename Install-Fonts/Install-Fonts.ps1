@@ -86,32 +86,49 @@ $fontFiles | ForEach-Object {
         $fontExtension = $_.Extension.ToLower()
         $fontPath = "C:\Windows\Fonts\$fontName"
         
-        # 检查字体是否已存在（不区分大小写）
+        # 根据字体类型确定注册表后缀
+        $registrySuffix = switch ($fontExtension) {
+            ".ttf" { " (TrueType)" }
+            ".ttc" { " (TrueType)" }
+            ".otf" { " (OpenType)" }
+            default { " (TrueType)" }
+        }
+        
+        # 构建注册表项名称
+        $registryName = $fontName -replace [regex]::Escape($_.Extension), $registrySuffix
+        
+        # 检查字体文件是否已存在
         $existingFont = Get-ChildItem -Path "C:\Windows\Fonts" -Filter $fontName -ErrorAction SilentlyContinue
         
-        if (-not $existingFont) {
+        # 检查注册表中是否已注册
+        $registryFont = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" `
+            -Name $registryName -ErrorAction SilentlyContinue
+        
+        # 如果文件存在且注册表中也已注册，则跳过
+        if ($existingFont -and $registryFont) {
+            $skippedCount++
+            Write-Host "字体已存在且已注册，跳过: $fontName" -ForegroundColor Yellow
+        }
+        # 如果文件不存在或注册表中未注册，则需要安装/修复
+        else {
             Write-Host "正在安装字体: $fontName" -NoNewline
             
             # 直接使用 Copy-Item（同步操作，速度快）
             try {
-                Copy-Item -Path $_.FullName -Destination $fontPath -Force -ErrorAction Stop
-                
-                # 根据字体类型确定注册表后缀
-                $registrySuffix = switch ($fontExtension) {
-                    ".ttf" { " (TrueType)" }
-                    ".ttc" { " (TrueType)" }
-                    ".otf" { " (OpenType)" }
-                    default { " (TrueType)" }
+                # 如果文件不存在，则复制文件
+                if (-not $existingFont) {
+                    Copy-Item -Path $_.FullName -Destination $fontPath -Force -ErrorAction Stop
                 }
                 
-                # 创建注册表项（使用大小写不敏感的替换）
-                $registryName = $fontName -replace [regex]::Escape($_.Extension), $registrySuffix
-                New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" `
-                    -Name $registryName `
-                    -Value $fontName `
-                    -PropertyType String `
-                    -Force `
-                    -ErrorAction Stop | Out-Null
+                # 如果注册表中不存在，则创建注册表项
+                if (-not $registryFont) {
+                    New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" `
+                        -Name $registryName `
+                        -Value $fontName `
+                        -PropertyType String `
+                        -Force `
+                        -ErrorAction Stop | Out-Null
+                }
                 
                 $installedCount++
                 Write-Host " - 成功" -ForegroundColor Green
@@ -121,9 +138,6 @@ $fontFiles | ForEach-Object {
                 Write-Host " - 失败: $($_.Exception.Message)" -ForegroundColor Red
                 Write-Warning "安装字体失败: $fontName - $($_.Exception.Message)"
             }
-        } else {
-            $skippedCount++
-            Write-Host "字体已存在，跳过: $fontName" -ForegroundColor Yellow
         }
     }
     catch {
