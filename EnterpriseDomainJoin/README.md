@@ -122,6 +122,7 @@ TESTPC02
 - 🔍 **智能预检查**：自动跳过已加入域的计算机
 - ✅ **分离式域加入**：域加入和重启分离执行，避免会话中断
 - 🔐 **域加入验证**：自动验证域加入操作是否成功
+- ⚙️ **WSMan自动配置**：自动检查并配置WSMan设置，确保非域环境下正常工作
 - ⏱️ **超时控制**：防止长时间等待，支持自动重试
 - 📊 **断点续传**：支持中断后继续处理
 - 🎯 **进度可视化**：实时显示处理进度和状态
@@ -131,11 +132,12 @@ TESTPC02
 
 ## 🔧 主要功能
 
-1. **批量修改DNS设置**：统一配置远程计算机的DNS服务器
-2. **批量域加入**：将多台计算机同时加入Active Directory域
-3. **域加入验证**：验证域加入操作是否成功完成
-4. **智能状态检查**：避免重复操作已配置的计算机
-5. **分离式重启管理**：域加入和重启分离执行，避免会话中断
+1. **WSMan自动配置**：自动检查并配置WSMan设置，确保非域环境下正常工作
+2. **批量修改DNS设置**：统一配置远程计算机的DNS服务器
+3. **批量域加入**：将多台计算机同时加入Active Directory域
+4. **域加入验证**：验证域加入操作是否成功完成
+5. **智能状态检查**：避免重复操作已配置的计算机
+6. **分离式重启管理**：域加入和重启分离执行，避免会话中断
 
 ## 📋 系统要求
 
@@ -145,6 +147,19 @@ TESTPC02
 - **权限要求**:
   - 目标计算机的本地管理员权限
   - 有权限将目标计算机加入域的域用户凭据
+  - **执行脚本的计算机需要管理员权限**（用于配置WSMan设置）
+
+### ⚙️ WSMan配置要求
+
+脚本会在执行前自动检查并配置以下WSMan设置，确保在非域环境下正常工作：
+
+- **TrustedHosts**: 自动配置为 `*`，允许连接到任何主机
+- **AllowUnencrypted**: 自动配置为 `true`，允许未加密的连接（非域环境必需）
+
+**注意**: 
+- 脚本会自动检查这些配置，如果未配置会自动进行配置
+- 如果配置失败，脚本会停止执行并提示错误信息
+- 确保以管理员身份运行脚本，否则无法修改WSMan配置
 
 ### 🔧 Windows Server 2012 R2 兼容性
 
@@ -255,12 +270,27 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 ```
 [2025-09-03 14:30:00] [INFO] === 批量域加入脚本开始执行（增强并行处理版本） ===
 [2025-09-03 14:30:00] [INFO] 📄 日志文件: D:\Scripts\Join-Domain-Enhanced-20250903-143000.log
+[2025-09-03 14:30:00] [INFO] 检查WSMan配置...
+[2025-09-03 14:30:00] [SUCCESS]   ✅ TrustedHosts 已正确配置（包含 '*'）: *
+[2025-09-03 14:30:00] [SUCCESS]   ✅ AllowUnencrypted 已正确配置为: True
+[2025-09-03 14:30:00] [SUCCESS] WSMan配置检查通过，无需修改。
 [2025-09-03 14:30:00] [INFO] 参数配置:
 [2025-09-03 14:30:00] [INFO]   计算机列表文件: C:\servers.txt
 [2025-09-03 14:30:00] [INFO]   目标域: contoso.com
 [2025-09-03 14:30:00] [INFO]   域控制器: DC01.contoso.com
 [2025-09-03 14:30:00] [INFO]   主DNS: 192.168.1.10
 [2025-09-03 14:30:00] [INFO]   最大并行数: 10
+```
+
+**如果WSMan配置需要更新，会显示：**
+```
+[2025-09-03 14:30:00] [INFO] 检查WSMan配置...
+[2025-09-03 14:30:00] [WARNING]   ⚠️  TrustedHosts 当前值: ''，需要配置为 '*' 以支持非域环境
+[2025-09-03 14:30:00] [WARNING]   ⚠️  AllowUnencrypted 当前值: 'False'，需要配置为 'true' 以支持非域环境
+[2025-09-03 14:30:00] [INFO] 开始配置WSMan设置...
+[2025-09-03 14:30:00] [SUCCESS]   ✅ 已成功配置 TrustedHosts 为 '*'
+[2025-09-03 14:30:00] [SUCCESS]   ✅ 已成功配置 AllowUnencrypted 为 'true'
+[2025-09-03 14:30:00] [SUCCESS] WSMan配置完成！
 ```
 
 ### 处理过程
@@ -310,7 +340,28 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 解决: 检查网络连接和DNS服务器配置
 ```
 
-#### 4. 并行处理相关错误
+#### 4. WSMan配置错误
+
+**配置失败**
+```
+错误: WSMan配置失败，脚本无法继续执行。请确保以管理员身份运行脚本。
+原因: 无法修改WSMan配置项
+解决: 
+1. 确保以管理员身份运行PowerShell
+2. 手动执行以下命令配置WSMan：
+   Set-Item WSMan:\localhost\Client\TrustedHosts *
+   Set-Item WSMan:\localhost\Client\AllowUnencrypted $true
+3. 检查执行策略：Get-ExecutionPolicy
+```
+
+**非域环境连接失败**
+```
+错误: 无法连接到远程计算机（在非域环境下）
+原因: WSMan未正确配置
+解决: 脚本会自动配置，如果失败请参考上面的解决方案
+```
+
+#### 5. 并行处理相关错误
 
 **内存不足**
 ```
@@ -366,13 +417,34 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 
 ## 🔧 脚本工作原理
 
+### ⚙️ WSMan配置检查（v2.4新增）
+
+脚本在执行远程操作前，会自动检查并配置WSMan设置：
+
+1. **检查TrustedHosts**: 验证是否包含 `*`（支持单独 `*` 或包含 `*` 的列表）
+2. **检查AllowUnencrypted**: 验证是否为 `true`
+3. **自动配置**: 如果配置不正确，自动进行配置
+4. **错误处理**: 如果配置失败，停止脚本执行并提示错误
+
+**配置命令**:
+```powershell
+Set-Item WSMan:\localhost\Client\TrustedHosts *
+Set-Item WSMan:\localhost\Client\AllowUnencrypted $true
+```
+
+**为什么需要这些配置？**
+- 在非域环境下，WinRM默认不允许连接到未受信任的主机
+- 非域环境通常使用HTTP（未加密）连接，需要允许未加密连接
+- 这些配置确保脚本可以在工作组环境中正常工作
+
 ### 📡 远程管理机制
 
 脚本基于 **PowerShell Remoting (WinRM)** 技术实现远程管理：
 
-1. **建立远程会话**：使用 `New-PSSession` 和 `Invoke-Command` 与目标计算机建立安全的远程PowerShell会话
-2. **凭据管理**：通过 `PSCredential` 对象安全传递本地管理员和域管理员凭据
-3. **远程执行**：在目标计算机上远程执行DNS配置和域加入命令
+1. **WSMan配置检查**: 首先检查并配置WSMan设置（v2.4新增）
+2. **建立远程会话**：使用 `New-PSSession` 和 `Invoke-Command` 与目标计算机建立安全的远程PowerShell会话
+3. **凭据管理**：通过 `PSCredential` 对象安全传递本地管理员和域管理员凭据
+4. **远程执行**：在目标计算机上远程执行DNS配置和域加入命令
 
 ### ⚡ 并行处理架构
 
@@ -396,6 +468,25 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 ```
 
 ### 🔄 核心执行流程
+
+#### 0. **WSMan配置检查阶段**（v2.4新增）
+```powershell
+# 检查并配置WSMan设置
+Test-AndConfigure-WSMan
+
+# 检查 TrustedHosts
+$trustedHosts = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value
+$hasWildcard = $trustedHosts -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq "*" }
+if (-not $hasWildcard) {
+    Set-Item WSMan:\localhost\Client\TrustedHosts "*"
+}
+
+# 检查 AllowUnencrypted
+$allowUnencrypted = (Get-Item WSMan:\localhost\Client\AllowUnencrypted).Value
+if ($allowUnencrypted -ne $true) {
+    Set-Item WSMan:\localhost\Client\AllowUnencrypted $true
+}
+```
 
 #### 1. **预检查阶段**
 ```powershell
@@ -510,8 +601,19 @@ try {
 - 建议在测试环境中先验证脚本功能
 - 执行前备份重要系统配置
 - 使用最小权限原则配置服务账户
+- **WSMan配置安全提示**：
+  - `TrustedHosts = *` 允许连接到任何主机，仅在受信任的网络环境中使用
+  - `AllowUnencrypted = true` 允许未加密连接，建议仅在非域环境或测试环境中使用
+  - 在生产环境中，建议使用HTTPS（5986端口）和域认证以提高安全性
 
 ## 📈 版本历史
+
+- **v2.4** (WSMan自动配置版):
+  - **⚙️ WSMan自动配置**: 自动检查并配置WSMan设置，确保非域环境下正常工作
+  - **🔍 智能检测**: 检查TrustedHosts和AllowUnencrypted配置
+  - **🛡️ 自动修复**: 如果配置不正确，自动进行配置
+  - **📝 详细日志**: 记录WSMan配置检查和配置过程
+  - **🚫 错误处理**: 配置失败时停止脚本执行并提示错误
 
 - **v2.3** (增强并行处理版 - 分离域加入和重启): 
   - **🚀 重大改进**: 分离域加入和重启操作，避免会话中断问题

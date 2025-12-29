@@ -834,12 +834,110 @@ $ProcessComputerScriptBlock = {
     return $result
 }
 
+#region WSMan配置检查
+# ================================================================================
+# WSMan配置检查和设置函数
+# ================================================================================
+
+function Test-AndConfigure-WSMan {
+    <#
+    .SYNOPSIS
+    检查并配置WSMan设置，确保在非域环境下可以正常进行远程操作
+    
+    .DESCRIPTION
+    检查以下WSMan配置：
+    1. WSMan:\localhost\Client\TrustedHosts 是否包含 "*" 或目标计算机
+    2. WSMan:\localhost\Client\AllowUnencrypted 是否为 true
+    
+    如果配置不正确，将自动进行配置。
+    #>
+    
+    Write-Log "检查WSMan配置..." -Level "INFO"
+    
+    $needsConfiguration = $false
+    $configurationChanges = @()
+    
+    try {
+        # 检查 TrustedHosts 配置
+        $trustedHosts = (Get-Item -Path "WSMan:\localhost\Client\TrustedHosts" -ErrorAction SilentlyContinue).Value
+        
+        # 检查是否包含 "*"（支持单独 "*" 或包含 "*" 的列表）
+        $hasWildcard = $false
+        if (-not [string]::IsNullOrWhiteSpace($trustedHosts)) {
+            $trustedHostsArray = $trustedHosts -split ',' | ForEach-Object { $_.Trim() }
+            $hasWildcard = $trustedHostsArray -contains "*"
+        }
+        
+        if (-not $hasWildcard) {
+            Write-Log "  ⚠️  TrustedHosts 当前值: '$trustedHosts'，需要配置为 '*' 以支持非域环境" -Level "WARNING"
+            $needsConfiguration = $true
+            $configurationChanges += "TrustedHosts"
+        } else {
+            Write-Log "  ✅ TrustedHosts 已正确配置（包含 '*'）: '$trustedHosts'" -Level "SUCCESS"
+        }
+        
+        # 检查 AllowUnencrypted 配置
+        $allowUnencrypted = (Get-Item -Path "WSMan:\localhost\Client\AllowUnencrypted" -ErrorAction SilentlyContinue).Value
+        
+        if ($allowUnencrypted -ne $true) {
+            Write-Log "  ⚠️  AllowUnencrypted 当前值: '$allowUnencrypted'，需要配置为 'true' 以支持非域环境" -Level "WARNING"
+            $needsConfiguration = $true
+            $configurationChanges += "AllowUnencrypted"
+        } else {
+            Write-Log "  ✅ AllowUnencrypted 已正确配置为: '$allowUnencrypted'" -Level "SUCCESS"
+        }
+        
+        # 如果需要配置，则进行配置
+        if ($needsConfiguration) {
+            Write-Log "开始配置WSMan设置..." -Level "INFO"
+            
+            # 配置 TrustedHosts
+            if ($configurationChanges -contains "TrustedHosts") {
+                try {
+                    Set-Item -Path "WSMan:\localhost\Client\TrustedHosts" -Value "*" -Force -ErrorAction Stop
+                    Write-Log "  ✅ 已成功配置 TrustedHosts 为 '*'" -Level "SUCCESS"
+                }
+                catch {
+                    Write-Log "  ❌ 配置 TrustedHosts 失败: $($_.Exception.Message)" -Level "ERROR"
+                    throw "无法配置 WSMan TrustedHosts: $($_.Exception.Message)"
+                }
+            }
+            
+            # 配置 AllowUnencrypted
+            if ($configurationChanges -contains "AllowUnencrypted") {
+                try {
+                    Set-Item -Path "WSMan:\localhost\Client\AllowUnencrypted" -Value $true -Force -ErrorAction Stop
+                    Write-Log "  ✅ 已成功配置 AllowUnencrypted 为 'true'" -Level "SUCCESS"
+                }
+                catch {
+                    Write-Log "  ❌ 配置 AllowUnencrypted 失败: $($_.Exception.Message)" -Level "ERROR"
+                    throw "无法配置 WSMan AllowUnencrypted: $($_.Exception.Message)"
+                }
+            }
+            
+            Write-Log "WSMan配置完成！" -Level "SUCCESS"
+        } else {
+            Write-Log "WSMan配置检查通过，无需修改。" -Level "SUCCESS"
+        }
+    }
+    catch {
+        Write-Log "WSMan配置检查或设置过程中发生错误: $($_.Exception.Message)" -Level "ERROR"
+        Write-Log "错误详情: $($_.Exception)" -Level "ERROR"
+        throw "WSMan配置失败，脚本无法继续执行。请确保以管理员身份运行脚本。"
+    }
+}
+
+#endregion WSMan配置检查
+
 #region 主程序
 # ================================================================================
 # 增强并行处理主程序
 # ================================================================================
 
 Write-Log "=== 批量域加入脚本开始执行（增强并行处理版本） ===" -Level "INFO"
+
+# 检查并配置WSMan设置（在非域环境下必需）
+Test-AndConfigure-WSMan
 # 获取日志文件的绝对路径
 $absoluteLogPath = (Resolve-Path $LogFile -ErrorAction SilentlyContinue).Path
 if (-not $absoluteLogPath) {
