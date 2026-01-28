@@ -1,4 +1,4 @@
-﻿# 常用PowerShell脚本集合
+# 常用PowerShell脚本集合
 
 ## 项目概述
 本仓库用于集中管理各类实用的PowerShell脚本，主要面向系统管理、自动化运维和Active Directory相关操作。当前包含域批量操作、远程管理、用户权限管理等功能模块。所有脚本均按功能模块组织在独立文件夹中，便于维护和扩展。
@@ -55,6 +55,9 @@
 ├── 📁 Install-Fonts/
 │   ├── 📄 Install-Fonts.ps1
 │   └── 📄 README.md
+├── 📁 Get-DisplayGraphicsCard/
+│   ├── 📄 Get-DisplayGraphicsCard.ps1
+│   └── 📄 README.md
 ├── 🖼️ AI发烧友二维码.png
 └── 📄 README.md
 ```
@@ -82,6 +85,7 @@
 | **系统信息查询工具** | 功能强大的Windows系统信息查询工具，支持本地/远程查询，使用高效的基于DCOM的CIM会话，自动收集计算机名、网络配置（含DNS）、管理员组成员、用户会话等信息，支持调试模式、超时控制、自动剪切板复制和文件保存，现已转换为独立可执行文件，双击即可查询计算机信息 | IT技术支持、故障诊断、资产管理、远程运维、系统监控 | 2025-08-01 | [📖 查看详情](./系统信息查询工具/README.md) |
 | **Get-RemoteHostInfo** | 远程主机信息查询工具，通过WinRM批量查询远程Windows主机的计算机名、IP地址和MAC地址，支持并行处理、智能重试、超时控制和CSV导出 | 批量资产管理、网络监控、远程运维、系统审计 | 最新 | [📖 查看详情](./Get-RemoteHostInfo/README.md) |
 | **Install-Fonts** | 字体批量安装工具，支持批量安装字体文件（.ttf、.ttc、.otf）到Windows系统字体目录，自动跳过已安装的字体，完善的错误处理和统计信息 | 系统部署、字体管理、批量安装、桌面运维 | 最新 | [📖 查看详情](./Install-Fonts/README.md) |
+| **Get-DisplayGraphicsCard** | 显示器显卡连接检测工具，使用Windows Display API和WMI技术检测显示器连接到独立显卡还是核显，支持多显示器环境、表格/JSON输出格式和详细信息模式 | 硬件配置检查、性能优化、故障诊断、系统审计 | 2026-01-28 | [📖 查看详情](./Get-DisplayGraphicsCard/README.md) |
 
 ### 防止计算机息屏,进入屏保和睡眠工具
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
