@@ -20,10 +20,77 @@ TESTPC01
 TESTPC02
 ```
 注意：一定要确保运行脚本的计算机能解析所有目标计算机的计算机名。可以通过更改系统hosts文件来实现。
-### 2. 基本使用示例
+### 2. 完整使用示例（推荐）✨
+
+以下是一个完整的企业级使用示例，包含所有最佳实践：
+
+```powershell
+# ============================================
+# 企业域加入批量操作 - 完整示例
+# ============================================
+
+# 步骤1：准备密码（使用SecureString，推荐方式）
+$localAdminPassword = ConvertTo-SecureString "YourLocalAdminPassword123!" -AsPlainText -Force
+$domainAdminPassword = ConvertTo-SecureString "YourDomainAdminPassword123!" -AsPlainText -Force
+
+# 步骤2：执行批量域加入操作
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\Scripts\servers.txt" `
+    -DomainName "contoso.com" `
+    -DomainController "DC01.contoso.com" `
+    -PrimaryDNS "192.168.1.10" `
+    -SecondaryDNS "192.168.1.11" `
+    -LocalAdminUsername "administrator" `
+    -LocalAdminPassword $localAdminPassword `
+    -DomainAdminUsername "joindomain" `
+    -DomainAdminPassword $domainAdminPassword `
+    -MaxConcurrency 15 `
+    -BatchSize 50 `
+    -TimeoutMinutes 12 `
+    -MaxRetries 3 `
+    -LogFile "C:\Logs\domain-join-$(Get-Date -Format 'yyyyMMdd-HHmmss').log" `
+    -ShowProgressBar
+
+# 步骤3：检查执行结果
+Write-Host "`n执行完成！请查看日志文件了解详细信息。" -ForegroundColor Green
+```
+
+**示例说明**：
+- ✅ 使用SecureString类型密码，提高安全性
+- ✅ 配置了主DNS和辅助DNS服务器
+- ✅ 设置了合理的并发数（15）和批处理大小（50）
+- ✅ 配置了超时和重试机制
+- ✅ 启用了进度条显示
+- ✅ 日志文件包含时间戳，便于追踪
+
+**从文件读取密码（更安全的方式）**：
+```powershell
+# 从加密文件读取密码（推荐用于生产环境）
+$encryptedPassword = Get-Content "C:\Secure\localadmin.encrypted" | ConvertTo-SecureString
+$domainPassword = Get-Content "C:\Secure\domainadmin.encrypted" | ConvertTo-SecureString
+
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\Scripts\servers.txt" `
+    -DomainName "contoso.com" `
+    -DomainController "DC01.contoso.com" `
+    -PrimaryDNS "192.168.1.10" `
+    -LocalAdminPassword $encryptedPassword `
+    -DomainAdminPassword $domainPassword `
+    -MaxConcurrency 10
+```
+
+**创建加密密码文件的方法**：
+```powershell
+# 创建加密的密码文件（只需执行一次）
+Read-Host "请输入本地管理员密码" -AsSecureString | ConvertFrom-SecureString | Out-File "C:\Secure\localadmin.encrypted"
+Read-Host "请输入域管理员密码" -AsSecureString | ConvertFrom-SecureString | Out-File "C:\Secure\domainadmin.encrypted"
+```
+
+### 3. 基本使用示例
 
 #### 小规模环境（10-50台）
 ```powershell
+# 交互式输入密码（适合小规模操作）
 .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
     -ComputerListFile "C:\servers.txt" `
     -DomainName "mycompany.local" `
@@ -35,20 +102,36 @@ TESTPC02
     -LogFile "C:\Logs\domain-join-parallel.log"
 ```
 
+**注意**：此示例会弹出凭据对话框，需要手动输入密码。
+
 #### 大规模环境（500-1000台）
 ```powershell
+# 大规模环境必须使用密码参数，避免频繁输入密码
+$localPwd = ConvertTo-SecureString "LocalAdmin123!" -AsPlainText -Force
+$domainPwd = ConvertTo-SecureString "DomainAdmin123!" -AsPlainText -Force
+
 .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
     -ComputerListFile "C:\1000servers.txt" `
     -DomainName "enterprise.local" `
     -DomainController "DC01.enterprise.local" `
     -PrimaryDNS "10.0.1.10" `
     -SecondaryDNS "10.0.1.11" `
+    -LocalAdminPassword $localPwd `
+    -DomainAdminPassword $domainPwd `
     -MaxConcurrency 20 `
     -BatchSize 100 `
     -TimeoutMinutes 15 `
     -MaxRetries 3 `
-    -ShowProgressBar
+    -ShowProgressBar `
+    -LogFile "C:\Logs\domain-join-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 ```
+
+**大规模环境建议**：
+- ✅ 使用密码参数，避免交互式输入
+- ✅ 增加并发数（MaxConcurrency）和批处理大小（BatchSize）
+- ✅ 设置合理的超时时间（TimeoutMinutes）
+- ✅ 启用进度条显示（ShowProgressBar）
+- ✅ 使用带时间戳的日志文件
 
 #### 使用自定义用户名
 ```powershell
@@ -63,24 +146,101 @@ TESTPC02
     -MaxConcurrency 10
 ```
 
+#### 使用密码参数（自动化场景）✨
+
+**方式1：使用SecureString（推荐，更安全）**
+```powershell
+# 在脚本中定义密码变量
+$localPwd = ConvertTo-SecureString "LocalAdmin123!" -AsPlainText -Force
+$domainPwd = ConvertTo-SecureString "DomainAdmin123!" -AsPlainText -Force
+
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\servers.txt" `
+    -DomainName "mycompany.local" `
+    -DomainController "ADSERVER01.mycompany.local" `
+    -PrimaryDNS "192.168.100.10" `
+    -SecondaryDNS "192.168.100.11" `
+    -LocalAdminPassword $localPwd `
+    -DomainAdminPassword $domainPwd `
+    -MaxConcurrency 10 `
+    -LogFile "C:\Logs\domain-join.log"
+```
+
+**方式2：从环境变量读取密码（生产环境推荐）**
+```powershell
+# 从环境变量读取密码（需要预先设置）
+$localPwd = ConvertTo-SecureString $env:LOCAL_ADMIN_PASSWORD -AsPlainText -Force
+$domainPwd = ConvertTo-SecureString $env:DOMAIN_ADMIN_PASSWORD -AsPlainText -Force
+
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\servers.txt" `
+    -DomainName "mycompany.local" `
+    -DomainController "ADSERVER01.mycompany.local" `
+    -PrimaryDNS "192.168.100.10" `
+    -LocalAdminPassword $localPwd `
+    -DomainAdminPassword $domainPwd `
+    -MaxConcurrency 10
+```
+
+**方式3：使用明文字符串（不推荐，仅用于测试）**
+```powershell
+# ⚠️ 警告：明文密码会出现在命令行历史中，仅用于测试环境
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\servers.txt" `
+    -DomainName "mycompany.local" `
+    -DomainController "ADSERVER01.mycompany.local" `
+    -PrimaryDNS "192.168.100.10" `
+    -LocalAdminPassword "LocalAdmin123!" `
+    -DomainAdminPassword "DomainAdmin123!" `
+    -MaxConcurrency 10
+```
+
+**方式4：混合模式（只提供其中一个密码）**
+```powershell
+# 只提供本地管理员密码，域管理员密码交互式输入
+$localPwd = ConvertTo-SecureString "LocalAdmin123!" -AsPlainText -Force
+
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\servers.txt" `
+    -DomainName "mycompany.local" `
+    -DomainController "ADSERVER01.mycompany.local" `
+    -PrimaryDNS "192.168.100.10" `
+    -LocalAdminPassword $localPwd
+    # DomainAdminPassword 将通过交互式输入对话框获取
+```
+
 #### 断点续传模式
 ```powershell
-# 首次执行
-.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
-    -ComputerListFile "C:\servers.txt" `
-    -DomainName "contoso.com" `
-    -DomainController "DC01.contoso.com" `
-    -PrimaryDNS "192.168.1.10" `
-    -ResumeFile "C:\progress.json"
+# 首次执行（使用密码参数，避免中断后需要重新输入）
+$localPwd = ConvertTo-SecureString "LocalAdmin123!" -AsPlainText -Force
+$domainPwd = ConvertTo-SecureString "DomainAdmin123!" -AsPlainText -Force
 
-# 中断后继续执行（使用相同的ResumeFile参数）
 .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
     -ComputerListFile "C:\servers.txt" `
     -DomainName "contoso.com" `
     -DomainController "DC01.contoso.com" `
     -PrimaryDNS "192.168.1.10" `
-    -ResumeFile "C:\progress.json"
+    -LocalAdminPassword $localPwd `
+    -DomainAdminPassword $domainPwd `
+    -ResumeFile "C:\progress.json" `
+    -MaxConcurrency 10
+
+# 中断后继续执行（使用相同的ResumeFile参数和密码）
+.\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 `
+    -ComputerListFile "C:\servers.txt" `
+    -DomainName "contoso.com" `
+    -DomainController "DC01.contoso.com" `
+    -PrimaryDNS "192.168.1.10" `
+    -LocalAdminPassword $localPwd `
+    -DomainAdminPassword $domainPwd `
+    -ResumeFile "C:\progress.json" `
+    -MaxConcurrency 10
 ```
+
+**断点续传说明**：
+- ✅ 使用密码参数可以避免中断后需要重新输入密码
+- ✅ ResumeFile 会记录已处理的计算机，自动跳过已完成的操作
+- ✅ 适合长时间运行的大批量操作
 
 ## 📝 参数说明
 
@@ -102,7 +262,9 @@ TESTPC02
 | `LogFile` | String | 否 | 日志文件路径（默认自动生成） |
 | `SkipRestart` | Switch | 否 | 跳过自动重启 |
 | `LocalAdminUsername` | String | 否 | 本地管理员用户名（默认：administrator） |
+| `LocalAdminPassword` | SecureString/String | 否 | 本地管理员密码（可选，如果未提供则交互式输入）<br>支持SecureString（推荐）或String类型 |
 | `DomainAdminUsername` | String | 否 | 域管理员用户名（默认：joindomain） |
+| `DomainAdminPassword` | SecureString/String | 否 | 域管理员密码（可选，如果未提供则交互式输入）<br>支持SecureString（推荐）或String类型 |
 
 ### 并行处理参数
 
@@ -148,6 +310,14 @@ TESTPC02
   - 目标计算机的本地管理员权限
   - 有权限将目标计算机加入域的域用户凭据
   - **执行脚本的计算机需要管理员权限**（用于配置WSMan设置）
+
+**凭据提供方式**：
+- **方式1（推荐）**：通过参数传递密码（`-LocalAdminPassword` 和 `-DomainAdminPassword`），适合自动化场景
+- **方式2**：交互式输入（如果未提供密码参数），脚本会弹出凭据对话框
+
+**安全建议**：
+- 优先使用 `SecureString` 类型传递密码，避免在命令行历史中暴露明文密码
+- 如果必须使用明文密码，建议通过环境变量或加密文件传递
 
 ### ⚙️ WSMan配置要求
 
@@ -331,7 +501,16 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 #### 2. 凭据验证失败
 ```
 错误: 访问被拒绝
-解决: 验证本地管理员和域管理员凭据是否正确
+原因: 
+- 本地管理员密码错误
+- 域管理员凭据错误
+- 目标计算机不允许远程访问
+- 密码参数类型不正确（应使用SecureString或String）
+
+解决: 
+- 验证本地管理员和域管理员凭据是否正确
+- 如果使用密码参数，确保密码类型正确（推荐使用SecureString）
+- 检查密码是否包含特殊字符需要转义
 ```
 
 #### 3. DNS解析失败
@@ -444,6 +623,9 @@ Set-Item WSMan:\localhost\Client\AllowUnencrypted $true
 1. **WSMan配置检查**: 首先检查并配置WSMan设置（v2.4新增）
 2. **建立远程会话**：使用 `New-PSSession` 和 `Invoke-Command` 与目标计算机建立安全的远程PowerShell会话
 3. **凭据管理**：通过 `PSCredential` 对象安全传递本地管理员和域管理员凭据
+   - 支持通过参数传递密码（SecureString或String类型）
+   - 支持交互式输入（如果未提供密码参数）
+   - 自动类型检测和转换，确保安全性
 4. **远程执行**：在目标计算机上远程执行DNS配置和域加入命令
 
 ### ⚡ 并行处理架构
@@ -601,12 +783,25 @@ try {
 - 建议在测试环境中先验证脚本功能
 - 执行前备份重要系统配置
 - 使用最小权限原则配置服务账户
+- **密码参数安全建议**：
+  - ✅ **推荐**：使用 `SecureString` 类型传递密码，避免在命令行历史中暴露
+  - ⚠️ **不推荐**：使用明文字符串传递密码，会在命令行历史中留下痕迹
+  - 💡 **最佳实践**：从加密文件或环境变量读取密码，然后转换为SecureString
 - **WSMan配置安全提示**：
   - `TrustedHosts = *` 允许连接到任何主机，仅在受信任的网络环境中使用
   - `AllowUnencrypted = true` 允许未加密连接，建议仅在非域环境或测试环境中使用
   - 在生产环境中，建议使用HTTPS（5986端口）和域认证以提高安全性
 
 ## 📈 版本历史
+
+- **v2.5** (密码参数支持版 - 2026-01-28):
+  - **✨ 新增密码参数支持**: 添加 `-LocalAdminPassword` 和 `-DomainAdminPassword` 参数
+  - **🔒 支持SecureString和String类型**: 自动类型检测和转换
+  - **🚀 自动化友好**: 支持通过参数传递密码，无需交互式输入
+  - **⚠️ 安全提示**: 使用明文密码时会显示警告，建议使用SecureString
+  - **🔄 向后兼容**: 未提供密码参数时保持原有的交互式输入方式
+
+- **v2.4** (WSMan自动配置版):
 
 - **v2.4** (WSMan自动配置版):
   - **⚙️ WSMan自动配置**: 自动检查并配置WSMan设置，确保非域环境下正常工作

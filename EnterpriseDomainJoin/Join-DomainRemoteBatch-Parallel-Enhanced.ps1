@@ -57,8 +57,16 @@
 .PARAMETER LocalAdminUsername
     远程Windows计算机本地管理员用户名（默认为administrator）
 
+.PARAMETER LocalAdminPassword
+    本地管理员密码（可选，如果未提供则交互式输入）
+    支持SecureString或String类型。为安全起见，建议使用SecureString
+
 .PARAMETER DomainAdminUsername
     域管理员用户名（默认为joindomain）
+
+.PARAMETER DomainAdminPassword
+    域管理员密码（可选，如果未提供则交互式输入）
+    支持SecureString或String类型。为安全起见，建议使用SecureString
 
 .EXAMPLE
     .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 -ComputerListFile "C:\servers.txt" -DomainName "contoso.com" -DomainController "DC01.contoso.com" -PrimaryDNS "192.168.1.10" -MaxConcurrency 10
@@ -74,6 +82,16 @@
 .EXAMPLE
     # 使用自定义用户名
     .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 -ComputerListFile "C:\servers.txt" -DomainName "contoso.com" -DomainController "DC01.contoso.com" -PrimaryDNS "192.168.1.10" -LocalAdminUsername "localadmin" -DomainAdminUsername "domainadmin"
+
+.EXAMPLE
+    # 使用密码参数（自动化场景）
+    $localPwd = ConvertTo-SecureString "LocalAdmin123!" -AsPlainText -Force
+    $domainPwd = ConvertTo-SecureString "DomainAdmin123!" -AsPlainText -Force
+    .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 -ComputerListFile "C:\servers.txt" -DomainName "contoso.com" -DomainController "DC01.contoso.com" -PrimaryDNS "192.168.1.10" -LocalAdminPassword $localPwd -DomainAdminPassword $domainPwd
+
+.EXAMPLE
+    # 使用字符串密码（不推荐，但支持）
+    .\Join-DomainRemoteBatch-Parallel-Enhanced.ps1 -ComputerListFile "C:\servers.txt" -DomainName "contoso.com" -DomainController "DC01.contoso.com" -PrimaryDNS "192.168.1.10" -LocalAdminPassword "LocalAdmin123!" -DomainAdminPassword "DomainAdmin123!"
 
 .NOTES
     作者: tornadoami
@@ -168,9 +186,15 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$LocalAdminUsername = "administrator",
     
+    [Parameter(Mandatory = $false, HelpMessage = "本地管理员密码（SecureString或String，可选）")]
+    [object]$LocalAdminPassword,
+    
     [Parameter(Mandatory = $false, HelpMessage = "域管理员用户名")]
     [ValidateNotNullOrEmpty()]
-    [string]$DomainAdminUsername = "joindomain"
+    [string]$DomainAdminUsername = "joindomain",
+    
+    [Parameter(Mandatory = $false, HelpMessage = "域管理员密码（SecureString或String，可选）")]
+    [object]$DomainAdminPassword
 )
 
 # 设置错误处理
@@ -1000,13 +1024,56 @@ try {
     
     # 获取凭据（使用指定的用户名）
     # 注意：脚本会自动为每台计算机构建 计算机名\用户名 格式的凭据
-    Write-Log "请提供本地管理员凭据（用户名将自动构建为: 计算机名\$LocalAdminUsername）..." -Level "INFO"
-    Write-Log "提示：在凭据对话框中，您可以输入任意用户名（如: .\$LocalAdminUsername），重要的是密码" -Level "INFO"
-    $localCredential = Get-Credential -UserName ".\$LocalAdminUsername" -Message "请输入本地管理员密码（用户名将自动构建为: 计算机名\$LocalAdminUsername）"
     
-    Write-Log "请提供域管理员凭据（用户名: $DomainName\$DomainAdminUsername）..." -Level "INFO"
+    # 处理本地管理员凭据
+    if ($LocalAdminPassword) {
+        # 如果提供了密码参数，直接创建凭据
+        Write-Log "使用参数提供的本地管理员密码创建凭据..." -Level "INFO"
+        $securePassword = $null
+        
+        # 判断密码类型并转换
+        if ($LocalAdminPassword -is [SecureString]) {
+            $securePassword = $LocalAdminPassword
+        } elseif ($LocalAdminPassword -is [string]) {
+            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARN"
+            $securePassword = ConvertTo-SecureString $LocalAdminPassword -AsPlainText -Force
+        } else {
+            throw "LocalAdminPassword参数类型不支持。请使用SecureString或String类型"
+        }
+        
+        $localCredential = New-Object System.Management.Automation.PSCredential(".\$LocalAdminUsername", $securePassword)
+        Write-Log "本地管理员凭据已从参数创建（用户名将自动构建为: 计算机名\$LocalAdminUsername）" -Level "INFO"
+    } else {
+        # 如果没有提供密码参数，交互式获取
+        Write-Log "请提供本地管理员凭据（用户名将自动构建为: 计算机名\$LocalAdminUsername）..." -Level "INFO"
+        Write-Log "提示：在凭据对话框中，您可以输入任意用户名（如: .\$LocalAdminUsername），重要的是密码" -Level "INFO"
+        $localCredential = Get-Credential -UserName ".\$LocalAdminUsername" -Message "请输入本地管理员密码（用户名将自动构建为: 计算机名\$LocalAdminUsername）"
+    }
+    
+    # 处理域管理员凭据
     $domainUserName = "$DomainName\$DomainAdminUsername"
-    $domainCredential = Get-Credential -UserName $domainUserName -Message "请输入域管理员凭据"
+    if ($DomainAdminPassword) {
+        # 如果提供了密码参数，直接创建凭据
+        Write-Log "使用参数提供的域管理员密码创建凭据..." -Level "INFO"
+        $securePassword = $null
+        
+        # 判断密码类型并转换
+        if ($DomainAdminPassword -is [SecureString]) {
+            $securePassword = $DomainAdminPassword
+        } elseif ($DomainAdminPassword -is [string]) {
+            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARN"
+            $securePassword = ConvertTo-SecureString $DomainAdminPassword -AsPlainText -Force
+        } else {
+            throw "DomainAdminPassword参数类型不支持。请使用SecureString或String类型"
+        }
+        
+        $domainCredential = New-Object System.Management.Automation.PSCredential($domainUserName, $securePassword)
+        Write-Log "域管理员凭据已从参数创建（用户名: $domainUserName）" -Level "INFO"
+    } else {
+        # 如果没有提供密码参数，交互式获取
+        Write-Log "请提供域管理员凭据（用户名: $domainUserName）..." -Level "INFO"
+        $domainCredential = Get-Credential -UserName $domainUserName -Message "请输入域管理员凭据"
+    }
     
     # 计算超时秒数
     $timeoutSeconds = $TimeoutMinutes * 60
