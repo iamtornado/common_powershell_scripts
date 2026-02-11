@@ -1035,7 +1035,7 @@ try {
         if ($LocalAdminPassword -is [SecureString]) {
             $securePassword = $LocalAdminPassword
         } elseif ($LocalAdminPassword -is [string]) {
-            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARN"
+            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARNING"
             $securePassword = ConvertTo-SecureString $LocalAdminPassword -AsPlainText -Force
         } else {
             throw "LocalAdminPassword参数类型不支持。请使用SecureString或String类型"
@@ -1061,7 +1061,7 @@ try {
         if ($DomainAdminPassword -is [SecureString]) {
             $securePassword = $DomainAdminPassword
         } elseif ($DomainAdminPassword -is [string]) {
-            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARN"
+            Write-Log "警告：使用明文密码，建议使用SecureString类型以提高安全性" -Level "WARNING"
             $securePassword = ConvertTo-SecureString $DomainAdminPassword -AsPlainText -Force
         } else {
             throw "DomainAdminPassword参数类型不支持。请使用SecureString或String类型"

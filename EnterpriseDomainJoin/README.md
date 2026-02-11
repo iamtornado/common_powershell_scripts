@@ -513,13 +513,29 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 - 检查密码是否包含特殊字符需要转义
 ```
 
-#### 3. DNS解析失败
+#### 3. 时间同步问题（导致访问被拒绝）
+
+```
+错误: 访问被拒绝 / Connecting to remote server failed
+原因: 
+- 管理机与目标机的系统时间相差过大（如时区错误导致相差 8 小时）
+- NTLMv2 认证在响应中包含时间戳用于防重放，时间偏差过大会导致认证失败
+- Kerberos 认证对时间更严格，默认仅允许 5 分钟偏差
+
+解决: 
+1. 在目标机上检查并修正系统时间（可通过 RDP 登录后查看）
+2. 开启「自动设置时间」或手动同步到正确时间
+3. 批量环境可执行: w32tm /resync 同步 Internet 时间
+4. 确保所有目标机、管理机、域控制器时间一致
+```
+
+#### 4. DNS解析失败
 ```
 错误: 无法解析域名
 解决: 检查网络连接和DNS服务器配置
 ```
 
-#### 4. WSMan配置错误
+#### 5. WSMan配置错误
 
 **配置失败**
 ```
@@ -540,7 +556,7 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 解决: 脚本会自动配置，如果失败请参考上面的解决方案
 ```
 
-#### 5. 并行处理相关错误
+#### 6. 并行处理相关错误
 
 **内存不足**
 ```
@@ -566,6 +582,7 @@ $isNowDomainMember = $computerSystem.PartOfDomain -and ($computerSystem.Domain -
 2. **降低并发数**：从小的 MaxConcurrency 值开始测试
 3. **分批测试**：先用少量计算机测试脚本功能
 4. **检查网络**：确保管理机到目标机的网络连通性
+5. **检查时间同步**：若出现「访问被拒绝」，可通过 RDP 登录目标机检查系统时间是否与正确时间一致（时区错误会导致 NTLM 认证失败）
 
 ## 📚 最佳实践
 
