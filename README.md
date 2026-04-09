@@ -35,6 +35,12 @@
 ├── 📁 将源AD域中的用户账户批量同步至目标域中/
 │   ├── 📄 将源AD域中的用户账户批量同步至目标域中.ps1
 │   └── 📄 README.md
+├── 📁 Export-ADGroupMembers/
+│   ├── 📄 Export-ADGroupMembers.ps1
+│   └── 📄 README.md
+├── 📁 Get-ADAccountLockoutSource/
+│   ├── 📄 Get-ADAccountLockoutSource.ps1
+│   └── 📄 README.md
 ├── 📁 Add-DomailnUserToLocalAdmin/
 │   ├── 📄 Add-DomainUserToLocalAdmin_fixed.ps1
 │   └── 📄 README.md
@@ -75,6 +81,8 @@
 |----------|----------|----------|----------|----------|
 | **企业域加入批量操作脚本（增强版）** | 企业级批量域加入工具，支持高性能并行处理（1-30台同时），智能预检查，分离式域加入验证，Windows Server 2012 R2兼容，断点续传，超时控制和智能重试机制 | 大规模域加入、企业系统部署、批量运维、域迁移 | 2025-09-03 | [📖 查看详情](./EnterpriseDomainJoin/README.md) |
 | **将源AD域中的用户账户批量同步至目标域中** | 跨域用户批量同步工具，支持用户属性映射、重复账户检测、邮件地址处理、操作结果统计和错误日志记录 | 域迁移、用户批量导入、多域环境管理 | 2025-06-16 | [📖 查看详情](./将源AD域中的用户账户批量同步至目标域中/README.md) |
+| **Export-ADGroupMembers** | 按 AD 组递归查询成员（用户），导出 CSV，含工号/姓名/OU 等字段，支持嵌套组、指定域控与凭据 | 组成员导出、审计、权限梳理 | 最新 | [📖 查看详情](./Export-ADGroupMembers/README.md) |
+| **Get-ADAccountLockoutSource** | 在域控 Security 日志中按用户排查账户锁定来源：4740 及可选 4625/4771/4776，导出 CSV（IP、工作站名、Caller Computer 等），支持远程 DC 与凭据 | 账户反复锁定、定位错误密码尝试来源、安全排查 | 2026-04-09 | [📖 查看详情](./Get-ADAccountLockoutSource/README.md) |
 
 ### 本地/远程Windows系统管理
 | 脚本名称 | 功能描述 | 适用场景 | 最后更新 | 详细文档 |
